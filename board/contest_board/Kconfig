@@ -1,11 +1,23 @@
 #
-# Contest 2026 team 000 board placeholder
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+# BK7258 DevKit board configuration options
 #
 
-if ARCH_BOARD_CONTEST2026_000_BOARD
+if ARCH_BOARD_CUSTOM
 
-config ARCH_BOARD_CONTEST2026_000_BOARD_TAG
-	string "Board tag"
-	default "contest2026_000_board"
+config BK7258_DEVKIT_LCD
+	bool "Enable BK7258 DevKit QSPI LCD"
+	default n
+	# TODO(M3): add dependencies per panel type, e.g.:
+	# select SPI
+	# select LCD
+	# select LCD_DEV
+	# select LCD_FRAMEBUFFER
+	---help---
+		Enable the on-board QSPI LCD support (M3, requires M1/M2 first).
+		See vendor/espressif/boards/esp32s3/esp32s3-eye for a ST7789 +
+		LCD_FRAMEBUFFER reference.
 
-endif
+endif # ARCH_BOARD_CUSTOM
