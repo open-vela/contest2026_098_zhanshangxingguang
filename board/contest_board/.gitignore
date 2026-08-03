@@ -1,0 +1,11 @@
+# repack.py runtime work directory: recreated (rmtree) on every run.
+# Contains the bootloader/app1 extracted from the factory firmware and the
+# generated all-app-nuttx.bin; not tracked (large, and contains Beken
+# proprietary images).
+tools/bk_repack_work/
+
+# Common temporaries / build artifacts
+*.pyc
+__pycache__/
+*.o
+*.elf
