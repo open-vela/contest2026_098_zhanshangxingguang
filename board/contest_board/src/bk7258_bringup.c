@@ -59,8 +59,9 @@ int bk7258_bringup(void)
     }
 #endif
 
-  /* TODO(M3): initialize the QSPI bus and register the LCD framebuffer
-   *   ret = bk7258_lcd_initialize();
+  /* GC9D01 dual-eye LCD is driven via the NSH command "lcdtest"
+   * (CONFIG_EXAMPLES_LCDTEST).  It is intentionally not called here —
+   * running the bit-bang bring-up at boot would block startup.
    */
 
   UNUSED(ret);
