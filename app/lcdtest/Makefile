@@ -1,5 +1,5 @@
 ############################################################################
-# vendor/beken/boards/bk7258/bk7258-devkit/src/Make.defs
+# apps/examples/lcdtest/Makefile
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
@@ -18,18 +18,13 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
+include $(APPDIR)/Make.defs
 
-CSRCS = bk7258_bringup.c bk7258_boardinitialize.c
+PROGNAME  = $(CONFIG_EXAMPLES_LCDTEST_PROGNAME)
+PRIORITY  = $(CONFIG_EXAMPLES_LCDTEST_PRIORITY)
+STACKSIZE = $(CONFIG_EXAMPLES_LCDTEST_STACKSIZE)
+MODULE    = $(CONFIG_EXAMPLES_LCDTEST)
 
-ifeq ($(CONFIG_BOARDCTL),y)
-CSRCS += bk7258_appinit.c
-endif
+MAINSRC = lcdtest_main.c
 
-ifeq ($(CONFIG_LCD_GC9D01),y)
-CSRCS += bk7258_gc9d01.c
-endif
-
-DEPPATH += --dep-path board
-VPATH += :board
-CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)board$(DELIM)board
+include $(APPDIR)/Application.mk
