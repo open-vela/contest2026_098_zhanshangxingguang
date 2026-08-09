@@ -1,0 +1,29 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config EXAMPLES_LCDTEST
+	tristate "GC9D01 LCD staged test"
+	default n
+	---help---
+		Staged bring-up test for the GC9D01 160x160 LCD on BK7258 DevKit.
+		Stage A: backlight on.  Stage B: reset + init.  Stage C: 40x40 red.
+
+if EXAMPLES_LCDTEST
+
+config EXAMPLES_LCDTEST_PROGNAME
+	string "Program name"
+	default "lcdtest"
+	---help---
+		NSH command name.
+
+config EXAMPLES_LCDTEST_PRIORITY
+	int "Task priority"
+	default 100
+
+config EXAMPLES_LCDTEST_STACKSIZE
+	int "Stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+endif

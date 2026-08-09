@@ -1,5 +1,5 @@
 # ##############################################################################
-# vendor/beken/boards/bk7258/bk7258-devkit/src/CMakeLists.txt
+# apps/examples/lcdtest/CMakeLists.txt
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more contributor
 # license agreements.  See the NOTICE file distributed with this work for
@@ -18,17 +18,16 @@
 #
 # ##############################################################################
 
-set(SRCS bk7258_bringup.c bk7258_boardinitialize.c)
-
-if(CONFIG_BOARDCTL)
-  list(APPEND SRCS bk7258_appinit.c)
+if(CONFIG_EXAMPLES_LCDTEST)
+  nuttx_add_application(
+    MODULE
+    ${CONFIG_EXAMPLES_LCDTEST}
+    NAME
+    ${CONFIG_EXAMPLES_LCDTEST_PROGNAME}
+    SRCS
+    lcdtest_main.c
+    STACKSIZE
+    ${CONFIG_EXAMPLES_LCDTEST_STACKSIZE}
+    PRIORITY
+    ${CONFIG_EXAMPLES_LCDTEST_PRIORITY})
 endif()
-
-if(CONFIG_LCD_GC9D01)
-  list(APPEND SRCS bk7258_gc9d01.c)
-endif()
-
-target_sources(board PRIVATE ${SRCS})
-
-# BK7258 CPU0 app linker script (FLASH XIP + RAM)
-set_property(GLOBAL PROPERTY LD_SCRIPT "${NUTTX_BOARD_DIR}/scripts/ld.script")
