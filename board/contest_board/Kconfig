@@ -20,4 +20,12 @@ config BK7258_DEVKIT_LCD
 		See vendor/espressif/boards/esp32s3/esp32s3-eye for a ST7789 +
 		LCD_FRAMEBUFFER reference.
 
+config LCD_GC9D01
+	bool "GC9D01 160x160 RGB565 LCD (bit-bang SPI)"
+	default n
+	---help---
+		Enable the GC9D01 160x160 round LCD on the BK7258 DevKit.
+		Uses bit-bang SPI on QSPI1 pins (GPIO 2-5) with separate
+		DC pin.  Fills screen with red on boot as a smoke test.
+
 endif # ARCH_BOARD_CUSTOM
