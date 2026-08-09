@@ -121,7 +121,7 @@ static void gpio_set_output(int pin)
 
   cfg &= ~GPIO_CFG_SECOND_FUNC;  /* GPIO mode (bit6 = 0) */
   cfg &= ~GPIO_CFG_OUTPUT_EN;    /* output enable (bit3 active-low: 0 = on) */
-  cfg &= ~GPIO_CFG_INPUT_EN;     /* input disable (bit2 active-high: 0 = off) */
+  cfg &= ~GPIO_CFG_INPUT_EN;     /* input off (bit2: 0=off) */
   putreg32(cfg, BK7258_GPIO_CFG(pin));
 }
 
@@ -458,6 +458,40 @@ static void lcd_fill_circle(int16_t cx, int16_t cy, int16_t r,
 }
 
 /****************************************************************************
+ * Name: lcd_fill_round_rect
+ *
+ * Description:
+ *   Fill a rounded rectangle centred at (cx,cy), width w, height h,
+ *   corner radius r.  Built from one inner rect + four corner circles.
+ *
+ ****************************************************************************/
+
+static void lcd_fill_round_rect(int16_t cx, int16_t cy,
+                                int16_t w, int16_t h,
+                                int16_t r, uint16_t color)
+{
+  int16_t x0 = cx - w / 2;
+  int16_t y0 = cy - h / 2;
+  int16_t x1 = cx + w / 2;
+  int16_t y1 = cy + h / 2;
+
+  /* Horizontal centre strip (full width, reduced height) */
+
+  lcd_fill_rect(x0, y0 + r, x1, y1 - r, color);
+
+  /* Vertical centre strip (reduced width, full height) */
+
+  lcd_fill_rect(x0 + r, y0, x1 - r, y1, color);
+
+  /* Four corner circles */
+
+  lcd_fill_circle(x0 + r, y0 + r, r, color);
+  lcd_fill_circle(x1 - r, y0 + r, r, color);
+  lcd_fill_circle(x0 + r, y1 - r, r, color);
+  lcd_fill_circle(x1 - r, y1 - r, r, color);
+}
+
+/****************************************************************************
  * Name: draw_eye
  *
  * Description:
@@ -476,6 +510,192 @@ static void draw_eye(void)
 
   syslog(LOG_INFO, "[eye] white highlight r=16 at (62,60)\n");
   lcd_fill_circle(62, 60, 16, 0xffff);
+}
+
+/****************************************************************************
+ * Name: eye_draw_full
+ *
+ * Description:
+ *   Full draw of the animated eye model on the current panel.
+ *   Call once per eye before starting animation.
+ *
+ *   Background: black
+ *   Iris:       cyan 0x07FF, centre (80,80), r=58
+ *   Pupil:      black 0x0000, r=22, centre (80+gaze_dx, 80)
+ *   Highlight:  white 0xFFFF, r=8, centre (80+gaze_dx-8, 80-10)
+ *
+ ****************************************************************************/
+
+#define EYE_CX        80
+#define EYE_CY        80
+#define EYE_IRIS_R    58
+#define EYE_PUPIL_R   22
+#define EYE_HIGHLIGHT_R 8
+
+static void eye_draw_full(int gaze_dx)
+{
+  int pcx = EYE_CX + gaze_dx;
+
+  syslog(LOG_INFO,
+         "[eye] full draw gaze_dx=%d\n", gaze_dx);
+
+  /* Black background */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+
+  /* Cyan iris */
+
+  lcd_fill_circle(EYE_CX, EYE_CY, EYE_IRIS_R, 0x07ff);
+
+  /* Black pupil */
+
+  lcd_fill_circle(pcx, EYE_CY, EYE_PUPIL_R, 0x0000);
+
+  /* White highlight (upper-left of pupil) */
+
+  lcd_fill_circle(pcx - 8, EYE_CY - 10,
+                  EYE_HIGHLIGHT_R, 0xffff);
+}
+
+/****************************************************************************
+ * Name: eye_move_pupil
+ *
+ * Description:
+ *   Local update: repaint old pupil position with iris colour, then
+ *   draw pupil + highlight at the new position.  No full-screen fill.
+ *
+ ****************************************************************************/
+
+static void eye_move_pupil(int old_dx, int new_dx)
+{
+  int old_cx = EYE_CX + old_dx;
+  int new_cx = EYE_CX + new_dx;
+
+  syslog(LOG_INFO,
+         "[eye] move pupil %d -> %d\n", old_dx, new_dx);
+
+  /* Erase old pupil (r23 to catch anti-aliased edge) */
+
+  lcd_fill_circle(old_cx, EYE_CY, 23, 0x07ff);
+
+  /* Erase old highlight (extends beyond pupil r22) */
+
+  lcd_fill_circle(old_cx - 8, EYE_CY - 10, 10, 0x07ff);
+
+  /* Black pupil at new position */
+
+  lcd_fill_circle(new_cx, EYE_CY, EYE_PUPIL_R, 0x0000);
+
+  /* White highlight */
+
+  lcd_fill_circle(new_cx - 8, EYE_CY - 10,
+                  EYE_HIGHLIGHT_R, 0xffff);
+}
+
+/****************************************************************************
+ * Name: eye_blink
+ *
+ * Description:
+ *   Quick blink: fill iris area black, pause, then redraw fully.
+ *
+ ****************************************************************************/
+
+static void eye_blink(int gaze_dx)
+{
+  int pcx = EYE_CX + gaze_dx;
+
+  syslog(LOG_INFO, "[eye] blink (gaze_dx=%d)\n", gaze_dx);
+
+  /* Close: black over iris area */
+
+  lcd_fill_circle(EYE_CX, EYE_CY, EYE_IRIS_R, 0x0000);
+  up_mdelay(120);
+
+  /* Open: iris -> pupil -> highlight (layered, no white dots) */
+
+  lcd_fill_circle(EYE_CX, EYE_CY, EYE_IRIS_R, 0x07ff);
+  lcd_fill_circle(pcx, EYE_CY, EYE_PUPIL_R, 0x0000);
+  lcd_fill_circle(pcx - 8, EYE_CY - 10,
+                  EYE_HIGHLIGHT_R, 0xffff);
+}
+
+/****************************************************************************
+ * Horizontal human-like expression eyes
+ *
+ * Bounding box: x in [10,150], y in [22,138].
+ * Each full-draw expression clears the box first (no ghosting).
+ * eye_look() uses local pupil update for speed.
+ ****************************************************************************/
+
+#define EMO_X0  10
+#define EMO_X1  150
+#define EMO_Y0  22
+#define EMO_Y1  138
+
+#define EMO_EYE_W   124
+#define EMO_EYE_H   86
+#define EMO_EYE_R   42
+#define EMO_PUPIL_R 26
+#define EMO_HL_R    10
+
+/* Current pupil gaze offset (tracked for local eye_look updates) */
+
+static int g_emo_gaze = 0;
+
+static void emo_clear(void)
+{
+  lcd_fill_rect(EMO_X0, EMO_Y0, EMO_X1, EMO_Y1, 0x0000);
+}
+
+/* Draw eye shape + pupil + highlight at gaze offset dx.
+ * Used by both neutral (after emo_clear) and look (overdraw).
+ */
+
+static void draw_eye_shape(int dx)
+{
+  lcd_fill_round_rect(80, 80, EMO_EYE_W, EMO_EYE_H,
+                      EMO_EYE_R, 0x07ff);
+  lcd_fill_circle(80 + dx, 80, EMO_PUPIL_R, 0x0000);
+  lcd_fill_circle(80 + dx - 10, 68, EMO_HL_R, 0xffff);
+}
+
+static void eye_neutral(void)
+{
+  emo_clear();
+  draw_eye_shape(0);
+  g_emo_gaze = 0;
+}
+
+static void eye_look(int dx)
+{
+  /* Redraw eye shape over current image — covers old pupil/highlight
+   * with iris colour, preserves rounded contour perfectly.
+   */
+
+  draw_eye_shape(dx);
+  g_emo_gaze = dx;
+}
+
+static void eye_happy(void)
+{
+  emo_clear();
+
+  /* Cyan filled circle */
+
+  lcd_fill_circle(80, 80, 54, 0x07ff);
+
+  /* Black over upper half (y < 80) to leave a smile */
+
+  lcd_fill_rect(EMO_X0, EMO_Y0, EMO_X1, 79, 0x0000);
+
+  g_emo_gaze = 0;
+}
+
+static void eye_emo_blink(void)
+{
+  emo_clear();
+  lcd_fill_round_rect(80, 80, EMO_EYE_W, 14, 7, 0x07ff);
+  g_emo_gaze = 0;
 }
 
 /****************************************************************************
@@ -859,6 +1079,281 @@ static int lcdtest_go(void)
 }
 
 /****************************************************************************
+ * Name: lcdtest_anim
+ *
+ * Description:
+ *   Eye animation demo: pupils track left/centre/right, with blinking.
+ *   Reuses go's power-on + init sequence, then runs 3 animation rounds.
+ *
+ ****************************************************************************/
+
+static int lcdtest_anim(void)
+{
+  int pin;
+  int count = 0;
+  int round;
+  int gaze = 0;
+
+  /* --- Power-on (same as go step1-3) --- */
+
+  syslog(LOG_INFO,
+         "[anim] step1: GPIO 0-52 high (skip reserved)\n");
+
+  for (pin = 0; pin <= 52; pin++)
+    {
+      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
+          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
+          pin == 24 || pin == 25 || pin == 29)
+        {
+          continue;
+        }
+
+      if (pin == 10 || pin == 11 || pin == 8 ||
+          pin == 20 || pin == 21 ||
+          pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      gpio_set_output(pin);
+      gpio_write(pin, 1);
+      count++;
+    }
+
+  syslog(LOG_INFO, "[anim] step1 done: %d pins\n", count);
+
+  syslog(LOG_INFO, "[anim] step2: wait 500 ms\n");
+  up_mdelay(500);
+
+  syslog(LOG_INFO, "[anim] step3: backlight P25 high\n");
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* --- Init left eye --- */
+
+  syslog(LOG_INFO, "[anim] init left eye\n");
+  lcd_setup_pins(&g_lcd_left);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  eye_draw_full(0);
+  lcd_display_on();
+
+  /* --- Init right eye --- */
+
+  syslog(LOG_INFO, "[anim] init right eye\n");
+  lcd_setup_pins(&g_lcd_right);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  eye_draw_full(0);
+  lcd_display_on();
+
+  /* --- Animation loop: 3 rounds --- */
+
+  for (round = 0; round < 3; round++)
+    {
+      syslog(LOG_INFO, "[anim] round %d/3\n", round + 1);
+
+      /* Look left: 0 -> -24 */
+
+      syslog(LOG_INFO, "[anim] look left\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_move_pupil(gaze, -24);
+      lcd_set_pins(&g_lcd_right);
+      eye_move_pupil(gaze, -24);
+      gaze = -24;
+      up_mdelay(500);
+
+      /* Look centre: -24 -> 0 */
+
+      syslog(LOG_INFO, "[anim] look centre\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_move_pupil(gaze, 0);
+      lcd_set_pins(&g_lcd_right);
+      eye_move_pupil(gaze, 0);
+      gaze = 0;
+      up_mdelay(500);
+
+      /* Look right: 0 -> +24 */
+
+      syslog(LOG_INFO, "[anim] look right\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_move_pupil(gaze, 24);
+      lcd_set_pins(&g_lcd_right);
+      eye_move_pupil(gaze, 24);
+      gaze = 24;
+      up_mdelay(500);
+
+      /* Look centre: +24 -> 0 */
+
+      syslog(LOG_INFO, "[anim] look centre\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_move_pupil(gaze, 0);
+      lcd_set_pins(&g_lcd_right);
+      eye_move_pupil(gaze, 0);
+      gaze = 0;
+      up_mdelay(500);
+
+      /* TODO: eye_blink disabled — bit-bang redraw too slow,
+       * enable after switching to QSPI with smooth refresh.
+       */
+    }
+
+  syslog(LOG_INFO, "[anim] done\n");
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lcdtest_emo
+ *
+ * Description:
+ *   Cozmo/Vector-style expression eye animation.
+ *   Two rounds of: neutral -> look L/C/R/C -> happy -> blink -> neutral.
+ *
+ ****************************************************************************/
+
+static int lcdtest_emo(void)
+{
+  int pin;
+  int count = 0;
+  int round;
+
+  /* --- Power-on (same as go) --- */
+
+  syslog(LOG_INFO,
+         "[emo] step1: GPIO 0-52 high (skip reserved)\n");
+
+  for (pin = 0; pin <= 52; pin++)
+    {
+      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
+          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
+          pin == 24 || pin == 25 || pin == 29)
+        {
+          continue;
+        }
+
+      if (pin == 10 || pin == 11 || pin == 8 ||
+          pin == 20 || pin == 21 ||
+          pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      gpio_set_output(pin);
+      gpio_write(pin, 1);
+      count++;
+    }
+
+  syslog(LOG_INFO, "[emo] step1 done: %d pins\n", count);
+
+  syslog(LOG_INFO, "[emo] step2: wait 500 ms\n");
+  up_mdelay(500);
+
+  syslog(LOG_INFO, "[emo] step3: backlight P25 high\n");
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* --- Init left eye --- */
+
+  syslog(LOG_INFO, "[emo] init left eye\n");
+  lcd_setup_pins(&g_lcd_left);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+  eye_neutral();
+  lcd_display_on();
+
+  /* --- Init right eye --- */
+
+  syslog(LOG_INFO, "[emo] init right eye\n");
+  lcd_setup_pins(&g_lcd_right);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+  eye_neutral();
+  lcd_display_on();
+
+  /* --- Expression loop: 2 rounds --- */
+
+  for (round = 0; round < 2; round++)
+    {
+      syslog(LOG_INFO, "[emo] round %d/2\n", round + 1);
+
+      /* neutral */
+
+      syslog(LOG_INFO, "[emo] neutral\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_neutral();
+      lcd_set_pins(&g_lcd_right);
+      eye_neutral();
+      up_mdelay(800);
+
+      /* look left */
+
+      syslog(LOG_INFO, "[emo] look left\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_look(-22);
+      lcd_set_pins(&g_lcd_right);
+      eye_look(-22);
+      up_mdelay(600);
+
+      /* look centre */
+
+      syslog(LOG_INFO, "[emo] look centre\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_look(0);
+      lcd_set_pins(&g_lcd_right);
+      eye_look(0);
+      up_mdelay(600);
+
+      /* look right */
+
+      syslog(LOG_INFO, "[emo] look right\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_look(22);
+      lcd_set_pins(&g_lcd_right);
+      eye_look(22);
+      up_mdelay(600);
+
+      /* happy */
+
+      syslog(LOG_INFO, "[emo] happy\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_happy();
+      lcd_set_pins(&g_lcd_right);
+      eye_happy();
+      up_mdelay(1000);
+
+      /* TODO: eye_emo_blink disabled — bit-bang scanline blink
+       * looks blocky; enable after switching to QSPI.
+       */
+
+      /* neutral */
+
+      syslog(LOG_INFO, "[emo] neutral\n");
+      lcd_set_pins(&g_lcd_left);
+      eye_neutral();
+      lcd_set_pins(&g_lcd_right);
+      eye_neutral();
+      up_mdelay(600);
+    }
+
+  syslog(LOG_INFO, "[emo] done\n");
+  return OK;
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -868,7 +1363,9 @@ static int lcdtest_go(void)
  * Description:
  *   NSH command "lcdtest":
  *     lcdtest          — staged bring-up (A/B/C, diagnostics)
- *     lcdtest go       — one-step reliable LCD bring-up
+ *     lcdtest go       — one-step dual-eye LCD bring-up
+ *     lcdtest anim     — pupil tracking animation (3 rounds)
+ *     lcdtest emo      — Cozmo/Vector expression eyes (2 rounds)
  *     lcdtest pwr lo hi — power-on GPIO range for binary-search
  *     lcdtest scan     — GPIO pin scan for LCD power enable
  *
@@ -879,6 +1376,16 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "go") == 0)
     {
       return lcdtest_go();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "anim") == 0)
+    {
+      return lcdtest_anim();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "emo") == 0)
+    {
+      return lcdtest_emo();
     }
 
   if (argc > 1 && strcmp(argv[1], "scan") == 0)
