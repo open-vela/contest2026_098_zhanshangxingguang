@@ -56,6 +56,7 @@
 #include <nuttx/nuttx.h>
 
 #include "bk7258_gpio.h"
+#include "bk7258_audio.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -696,6 +697,197 @@ static void eye_emo_blink(void)
   emo_clear();
   lcd_fill_round_rect(80, 80, EMO_EYE_W, 14, 7, 0x07ff);
   g_emo_gaze = 0;
+}
+
+/****************************************************************************
+ * Official-website-style eye: white bg + blue iris + black eyelids
+ *
+ * Color palette (RGB565):
+ *   0xFFFF  white  (background)
+ *   0x02DF  sky-blue (iris) — try 0x001F for deeper blue
+ *   0x0000  black  (pupil, eyelids)
+ *   0xFFFF  white  (highlight)
+ ****************************************************************************/
+
+#define OEYE_BG        0xFFFF  /* white */
+#define OEYE_IRIS      0x02DF  /* sky-blue */
+#define OEYE_PUPIL     0x0000  /* black */
+#define OEYE_HL        0xFFFF  /* white highlight */
+#define OEYE_LID       0x0000  /* black eyelid */
+
+#define OEYE_IRIS_R    56     /* blue iris with visible white border */
+#define OEYE_PUPIL_R   28     /* black pupil */
+#define OEYE_HL1_R     10     /* primary highlight upper-left */
+#define OEYE_HL1_X     68     /* primary highlight centre */
+#define OEYE_HL1_Y     68
+#define OEYE_HL2_R     4      /* secondary highlight lower-right */
+#define OEYE_HL2_X     92     /* secondary highlight centre */
+#define OEYE_HL2_Y     92
+
+/* Iris bounding box — the only region we redraw per frame.
+ * iris at (80,80) r56 → x,y ∈ [24,136].
+ */
+
+#define OEYE_BOX_L     24
+#define OEYE_BOX_R     136
+#define OEYE_BOX_T     24
+#define OEYE_BOX_B     136
+
+/* Eyelid Y boundaries for each expression */
+
+#define OEYE_NEUTRAL_TOP  16   /* neutral: upper lid covers y 0..16 */
+#define OEYE_NEUTRAL_BOT  143  /* neutral: lower lid covers y 143..159 */
+#define OEYE_HALF_TOP     50   /* half: upper lid covers y 0..50 */
+#define OEYE_HALF_BOT     110  /* half: lower lid covers y 110..159 */
+#define OEYE_BLINK_TOP    70   /* blink: black arc top edge */
+#define OEYE_BLINK_BOT    90   /* blink: black arc bottom edge */
+#define OEYE_HAPPY_BOT    115  /* happy: lower lid pushed up */
+
+/****************************************************************************
+ * Name: draw_oeye_bg
+ *
+ * Description:
+ *   Full-screen white fill.  Call ONCE per panel before the
+ *   expression loop.  Never called again during the loop.
+ *
+ ****************************************************************************/
+
+static void draw_oeye_bg(void)
+{
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, OEYE_BG);
+}
+
+/****************************************************************************
+ * Name: draw_oeye_content
+ *
+ * Description:
+ *   Redraw only the iris bounding box: clear box to white, then
+ *   draw blue iris + black pupil + two highlights.  This is the
+ *   fast per-frame content update — no full-screen fill.
+ *
+ ****************************************************************************/
+
+static void draw_oeye_content(void)
+{
+  /* Clear iris box to white (erases previous pupil/highlight/lid) */
+
+  lcd_fill_rect(OEYE_BOX_L, OEYE_BOX_T, OEYE_BOX_R, OEYE_BOX_B,
+                OEYE_BG);
+
+  /* Blue iris */
+
+  lcd_fill_circle(80, 80, OEYE_IRIS_R, OEYE_IRIS);
+
+  /* Black pupil */
+
+  lcd_fill_circle(80, 80, OEYE_PUPIL_R, OEYE_PUPIL);
+
+  /* Two white highlights */
+
+  lcd_fill_circle(OEYE_HL1_X, OEYE_HL1_Y, OEYE_HL1_R, OEYE_HL);
+  lcd_fill_circle(OEYE_HL2_X, OEYE_HL2_Y, OEYE_HL2_R, OEYE_HL);
+}
+
+/****************************************************************************
+ * Name: eye_o_neutral
+ *
+ * Description:
+ *   Neutral / fully open: redraw iris content + thin black eyelid
+ *   strips top and bottom.  The strips are outside the iris box
+ *   (y 0..16 and 143..159) so they overwrite the white bg there.
+ *
+ ****************************************************************************/
+
+static void eye_o_neutral(void)
+{
+  draw_oeye_content();
+
+  /* Upper eyelid: thin black strip at top */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, OEYE_NEUTRAL_TOP, OEYE_LID);
+
+  /* Lower eyelid: thin black strip at bottom */
+
+  lcd_fill_rect(0, OEYE_NEUTRAL_BOT, LCD_WIDTH - 1, LCD_HEIGHT - 1,
+                OEYE_LID);
+}
+
+/****************************************************************************
+ * Name: eye_o_half
+ *
+ * Description:
+ *   Half-closed: redraw iris content + wider black eyelid strips.
+ *   Upper lid extends into the iris box (y 0..50), lower lid
+ *   extends into the iris box (y 110..159).
+ *
+ ****************************************************************************/
+
+static void eye_o_half(void)
+{
+  draw_oeye_content();
+
+  /* Upper eyelid: covers top portion of iris (extends into box) */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, OEYE_HALF_TOP, OEYE_LID);
+
+  /* Lower eyelid: covers bottom portion (extends into box) */
+
+  lcd_fill_rect(0, OEYE_HALF_BOT, LCD_WIDTH - 1, LCD_HEIGHT - 1,
+                OEYE_LID);
+}
+
+/****************************************************************************
+ * Name: eye_o_blink
+ *
+ * Description:
+ *   Fully closed: clear iris box to white + draw thick black band
+ *   y70..90.  Also restore any previous eyelid strips outside the
+ *   box (top/bottom) back to white so only the black arc remains.
+ *
+ ****************************************************************************/
+
+static void eye_o_blink(void)
+{
+  /* Clear iris box to white */
+
+  lcd_fill_rect(OEYE_BOX_L, OEYE_BOX_T, OEYE_BOX_R, OEYE_BOX_B,
+                OEYE_BG);
+
+  /* Restore top/bottom strips outside box to white
+   * (removes leftover black eyelid from previous frame)
+   */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, OEYE_BOX_T - 1, OEYE_BG);
+  lcd_fill_rect(0, OEYE_BOX_B + 1, LCD_WIDTH - 1, LCD_HEIGHT - 1,
+                OEYE_BG);
+
+  /* Black arc: thick band across the middle of the iris box */
+
+  lcd_fill_rect(OEYE_BOX_L, OEYE_BLINK_TOP, OEYE_BOX_R, OEYE_BLINK_BOT,
+                OEYE_LID);
+}
+
+/****************************************************************************
+ * Name: eye_o_happy
+ *
+ * Description:
+ *   Happy: redraw iris content + thin top lid + lower lid pushed
+ *   up to y=115 (smile arc).  Lower lid extends into the iris box.
+ *
+ ****************************************************************************/
+
+static void eye_o_happy(void)
+{
+  draw_oeye_content();
+
+  /* Upper eyelid: thin strip (same as neutral) */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, OEYE_NEUTRAL_TOP, OEYE_LID);
+
+  /* Lower eyelid: push up to carve a smile arc */
+
+  lcd_fill_rect(0, OEYE_HAPPY_BOT, LCD_WIDTH - 1, LCD_HEIGHT - 1,
+                OEYE_LID);
 }
 
 /****************************************************************************
@@ -1354,6 +1546,306 @@ static int lcdtest_emo(void)
 }
 
 /****************************************************************************
+ * Name: lcdtest_hear
+ *
+ * Description:
+ *   Continuous sound localization loop.
+ *   LCD + audio_init once at start.  Then loop up to 300 iterations:
+ *     capture N=2048 → onset gate → locate → eye_look → print.
+ *   Exits on iteration cap or serial keypress.
+ *
+ ****************************************************************************/
+
+#define HEAR_LOOP_MAX    80    /* ~4-5 s at ~60 ms per iteration */
+#define HEAR_N_SAMPLES   2048
+#define HEAR_ONSET_GATE  80   /* RMS threshold to trigger locate */
+
+static int lcdtest_hear(void)
+{
+  int tau_q8;
+  int dx;
+  int iter;
+  int n;
+  int energy;
+  int pin;
+  int count = 0;
+
+  /* ---- Hardware bring-up (same as lcdtest_go steps 1-5,7,9-10,12
+   *       but WITHOUT draw_eye — we paint emo eyes directly).
+   * ---- Step 1: GPIO 0-52 high, skip reserved pins ---- */
+
+  for (pin = 0; pin <= 52; pin++)
+    {
+      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
+          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
+          pin == 24 || pin == 25 || pin == 29)
+        {
+          continue;
+        }
+
+      if (pin == 10 || pin == 11 || pin == 8 ||
+          pin == 20 || pin == 21 ||
+          pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      gpio_set_output(pin);
+      gpio_write(pin, 1);
+      count++;
+    }
+
+  /* Step 2: wait for power rails */
+
+  up_mdelay(500);
+
+  /* Step 3: backlight on */
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* ---- Left eye: SPI pins + RST + init + display on ---- */
+
+  lcd_setup_pins(&g_lcd_left);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* ---- Right eye: SPI pins + RST + init + display on ---- */
+
+  lcd_setup_pins(&g_lcd_right);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* ---- Draw emo eyes (no round-eye flash) ---- */
+
+  lcd_set_pins(&g_lcd_left);
+  eye_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  /* Initialize audio ADC (once) */
+
+  audio_init();
+
+  /* Suppress per-capture syslog during tight loop */
+
+  bk7258_mic_set_quiet(true);
+
+  syslog(LOG_INFO,
+         "[hear] === sound localization loop ===\n"
+         "[hear] loop_max=%d  N=%d  onset_gate=%d\n",
+         HEAR_LOOP_MAX, HEAR_N_SAMPLES, HEAR_ONSET_GATE);
+
+  for (iter = 0; iter < HEAR_LOOP_MAX; iter++)
+    {
+      /* Capture a chunk */
+
+      n = audio_capture(HEAR_N_SAMPLES);
+      if (n < 64)
+        {
+          continue;
+        }
+
+      /* Onset gate: check energy before running full locate */
+
+      energy = bk7258_mic_energy(n);
+      if (energy < HEAR_ONSET_GATE)
+        {
+          continue;
+        }
+
+      /* Sound detected — run full locate on this capture */
+
+      dx = mic_locate_process(n, &tau_q8);
+
+      syslog(LOG_INFO,
+             "[hear] iter=%d  energy=%d  dx=%d  "
+             "tau_q8=%d (%.2f samp)\n",
+             iter, energy, dx,
+             tau_q8, (double)tau_q8 / 256.0);
+
+      /* Drive eye toward detected direction (both panels) */
+
+      lcd_set_pins(&g_lcd_left);
+      eye_look(dx);
+      lcd_set_pins(&g_lcd_right);
+      eye_look(dx);
+      lcd_set_pins(&g_lcd_left);
+    }
+
+  /* Cleanup */
+
+  bk7258_mic_set_quiet(false);
+  audio_deinit();
+
+  syslog(LOG_INFO,
+         "[hear] loop ended after %d iterations\n", iter);
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: lcdtest_oeye
+ *
+ * Description:
+ *   Preview official-website-style eyes on both panels.
+ *   Cycles: neutral → half → blink → neutral → happy → neutral.
+ *
+ ****************************************************************************/
+
+static int lcdtest_oeye(void)
+{
+  /* Hardware bring-up (same as lcdtest_go but skip draw_eye) */
+
+  int pin;
+  int count = 0;
+
+  for (pin = 0; pin <= 52; pin++)
+    {
+      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
+          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
+          pin == 24 || pin == 25 || pin == 29)
+        {
+          continue;
+        }
+
+      if (pin == 10 || pin == 11 || pin == 8 ||
+          pin == 20 || pin == 21 ||
+          pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      gpio_set_output(pin);
+      gpio_write(pin, 1);
+      count++;
+    }
+
+  up_mdelay(500);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* Left panel init */
+
+  lcd_setup_pins(&g_lcd_left);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* Right panel init */
+
+  lcd_setup_pins(&g_lcd_right);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* White background — once per panel, never again in the loop */
+
+  lcd_set_pins(&g_lcd_left);
+  draw_oeye_bg();
+  lcd_set_pins(&g_lcd_right);
+  draw_oeye_bg();
+  lcd_set_pins(&g_lcd_left);
+
+  syslog(LOG_INFO,
+         "[oeye] === official eye preview (partial redraw) ===\n"
+         "[oeye] iris_r=%d pupil_r=%d hl1_r=%d hl2_r=%d\n",
+         OEYE_IRIS_R, OEYE_PUPIL_R, OEYE_HL1_R, OEYE_HL2_R);
+
+  /* --- Frame 1: neutral (fully open) --- */
+
+  syslog(LOG_INFO, "[oeye] frame: NEUTRAL\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(2000);
+
+  /* --- Frame 2: half-closed --- */
+
+  syslog(LOG_INFO, "[oeye] frame: HALF\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_half();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_half();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(1200);
+
+  /* --- Frame 3: fully closed (blink) --- */
+
+  syslog(LOG_INFO, "[oeye] frame: BLINK\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_blink();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_blink();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(800);
+
+  /* --- Frame 4: back to neutral --- */
+
+  syslog(LOG_INFO, "[oeye] frame: NEUTRAL\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(2000);
+
+  /* --- Frame 5: happy --- */
+
+  syslog(LOG_INFO, "[oeye] frame: HAPPY\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_happy();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_happy();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(2000);
+
+  /* --- Frame 6: back to neutral --- */
+
+  syslog(LOG_INFO, "[oeye] frame: NEUTRAL\n");
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(2000);
+
+  syslog(LOG_INFO, "[oeye] done\n");
+
+  return OK;
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -1366,6 +1858,9 @@ static int lcdtest_emo(void)
  *     lcdtest go       — one-step dual-eye LCD bring-up
  *     lcdtest anim     — pupil tracking animation (3 rounds)
  *     lcdtest emo      — Cozmo/Vector expression eyes (2 rounds)
+ *     lcdtest oeye     — official-website-style eye preview
+ *     lcdtest hear     — sound localization → eye_look
+ *     lcdtest mic      — raw ADC capture + RMS dump
  *     lcdtest pwr lo hi — power-on GPIO range for binary-search
  *     lcdtest scan     — GPIO pin scan for LCD power enable
  *
@@ -1386,6 +1881,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "emo") == 0)
     {
       return lcdtest_emo();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "oeye") == 0)
+    {
+      return lcdtest_oeye();
     }
 
   if (argc > 1 && strcmp(argv[1], "scan") == 0)
@@ -1426,6 +1926,16 @@ int bk7258_lcdtest_main(int argc, char *argv[])
         }
 
       return lcdtest_pwr(lo, hi);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "hear") == 0)
+    {
+      return lcdtest_hear();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "mic") == 0)
+    {
+      return bk7258_mic_main(argc - 1, &argv[1]);
     }
 
   return lcdtest_stages();
