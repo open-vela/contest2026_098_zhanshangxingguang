@@ -28,6 +28,8 @@ if(CONFIG_LCD_GC9D01)
   list(APPEND SRCS bk7258_gc9d01.c)
 endif()
 
+list(APPEND SRCS bk7258_audio.c)
+
 target_sources(board PRIVATE ${SRCS})
 
 # BK7258 CPU0 app linker script (FLASH XIP + RAM)
