@@ -1362,3 +1362,144 @@ ana_write(ANA_REG_Y, v2);
 - 🟡 与喇叭同时工作时需验证回声/啸叫(结构上应隔离麦腔与喇叭腔;必要时启用芯片 AEC)
 
 > 待续:🔵 外壳定位后标定间距 → 48kHz + 亚采样插值 → DMA 化 → 与表情引擎联动做"听觉引导视觉"。
+
+---
+
+## 22. PSRAM bring-up（S1: 上电 + ID 识别 + 数据通路验证）
+
+日期: 2026-08-13
+
+### 22.1 背景与阻塞项
+
+AP 侧只有 336KB SRAM（0x28010000 ~ +336KB），双屏双缓冲 + 摄像头帧缓冲
+（GC2145 640×480 YUYV 单帧 ~614KB）都放不下。PSRAM（0x60000000）完全未初始化，
+是当前头号阻塞项。
+
+### 22.2 参考移植来源
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> Armino SDK（Apache-2.0）:
+  `psram_driver.c`（init 序列）、`psram_hal.c`（寄存器级操作）、
+  `sys_psram_driver.c`（电源树）、`psram_hal.h`（ID 常量/模式值）
+- 🔵 <span style="color:#0969da">**说明**</span> 去掉了 rtos_mutex / semaphore /
+  psram_task / env 读写等 OS 依赖，只取寄存器序列、时序等待、ID 判定
+- 芯片 ID → 容量: `0x8D09`=8MB (APS6408L)、`0x8D08`=16MB (APS128XXO)、
+  `0x1C8F`=4MB (W955D8MKY)
+
+### 22.3 实现内容
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> 芯片级驱动:
+  `nuttx/arch/arm/src/bk7258/bk7258_psram.c` +
+  `hardware/bk7258_psram.h`（寄存器定义）+
+  `bk7258_psram.h`（公共头文件）
+- 🟢 <span style="color:#1a7f37">**新增**</span> NSH app:
+  `apps/examples/psram/`（`psram id` / `psram probe`）
+- 🟡 <span style="color:#9a6700">**修改**</span> Kconfig:
+  新增 `CONFIG_BK7258_PSRAM`（default n，显式在 defconfig 里 =y）
+- 🟡 <span style="color:#9a6700">**修改**</span> defconfig:
+  新增 `CONFIG_BK7258_PSRAM=y` + `CONFIG_EXAMPLES_PSRAM=y`
+
+### 22.4 init 序列（寄存器级，修正版）
+
+```
+ 1) ana_reg13 @ 0x44010134: 逐 bit ana_rmw 设 psldo_swb=1, vpsramsel=3
+    → 1.95V（必须走 ana_write，禁止裸 putreg —— 见 22.8 踩坑）
+ 2) ana_rmw 设 enpsram=1 → LDO 使能，等 1ms
+ 3) cpu_power_sleep_wakeup @ 0x44010040: 清 pwd_ahbp (bit5)
+    → AHB PSRAM 电源域上电
+ 4) cpu_clk_div_mode2 @ 0x44010024: cksel=0, ckdiv=1 → 80MHz init 时钟
+ 5) cpu_device_clk_enable @ 0x44010030: 置 psram_cken (bit19)
+    → PSRAM 外设时钟使能
+ 6) REG2 @ 0x46080008: 读改写置 bit[0]=1 (sf_reset) + bit[1]=1 (bypass)
+ 7) 按优先级尝试三种 PSRAM（每种完整配置 MR 寄存器）:
+    - APS6408L:  MODE6 → drv=0x380 → reset → 读 ID → 配 MR0/MR4
+    - APS128XXO: MODE7 → drv=0x380 → reset → 读 ID → 配 MR0/MR4/MR8
+    - W955D8MKY: MODE8 → drv=0x292 → reset → 读 ID → 配驱动
+ 8) 等 1ms → 切 120MHz 默认时钟（cksel=1, ckdiv=1）
+```
+
+### 22.5 数据通路验证
+
+- 🔴 <span style="color:#d1242f">**坑**</span> ID 读取走的是命令寄存器通路（REG9/REG_A/REG_B），
+  证明不了数据窗口 0x60000000 能不能用 — 那是 AXI 内存映射通路，另一条路
+- 🟢 <span style="color:#1a7f37">**新增**</span> `psram probe` 在 init 成功后额外做:
+  对 0x60000000 写 0xdeadbeef → 读回比对 → 恢复原值
+  通过则说明 AXI 数据通路可用
+
+### 22.6 设计决策
+
+- 🔵 <span style="color:#0969da">**说明**</span> 驱动放芯片级（`nuttx/arch/arm/src/bk7258/`），
+  非板级。理由: PSRAM 控制器是 SoC 片上外设（寄存器 @ 0x46080000），
+  外置的只是 PSRAM 颗粒本身。先例: ESP32 spiram 在 arch/xtensa/src/esp32/、
+  STM32 FSMC/FMC 在 arch/arm/src/stm32/
+- 🔵 <span style="color:#0969da">**说明**</span> `CONFIG_BK7258_PSRAM` default n:
+  PSRAM 上电序列是最可能挂核的一步，留一个能快速关掉的开关
+- 🔵 <span style="color:#0969da">**说明**</span> 不在开机路径自动初始化，由 `psram probe` 命令触发。
+  万一序列把核挂住，重启仍能进 NSH，不至于变砖
+- 🔵 <span style="color:#0969da">**说明**</span> 未配置 MPU / D-cache（defconfig 无
+  CONFIG_ARMV8M_DCACHE），cache 一致性暂不处理
+
+### 22.7 当前状态与验收标准
+
+- ✅ checkpatch 0 error（所有 5 个文件）
+- ✅ 构建通过（flash 204028B, sram 38084B）
+- ⬜ 待实测: `psram id` 打印 chip ID 与容量
+- ⬜ 待实测: `psram probe` 数据通路 0xdeadbeef 读回验证
+
+### 22.8 踩坑记录：模拟寄存器写协议（再犯）
+
+- 🔴 <span style="color:#d1242f">**坑**</span> **模拟寄存器裸写** — S1 初版用
+  `psram_putreg(PSRAM_VOLTAGE_LDO_EN, SYS_ANA_REG13)` 一次性写整个 ana_reg13。
+  这违反了 `bk7258-armino-port/SKILL.md` 步骤 4 第 ④ 条的明确规则。
+  两个错误:
+  (a) 未轮询 SPI 总线完成（`ANA_SPI_STATE_REG @ 0x440100E8`），
+      写操作可能未下发到模拟前端
+  (b) 整寄存器盲写，破坏了 ana_reg13 内其它模拟块的控制位
+- 🔴 <span style="color:#d1242f">**坑**</span> **漏掉 AHB 电源域和时钟门控** —
+  Armino `psram_hal_power_clk_enable()` 的 8 步序列里有两步被遗漏:
+  `bk_pm_module_vote_power_ctrl(AHBP_PSRAM, ON)`（清 `pwd_ahbp` bit5 @ 0x44010040）
+  和 `sys_drv_dev_clk_pwr_up(CLK_PWR_ID_PSRAM)`（置 `psram_cken` bit19 @ 0x44010030）。
+  不做这两步，PSRAM 控制器的总线时钟不通。
+- 🔴 <span style="color:#d1242f">**坑**</span> **漏掉 REG2 bypass 位** —
+  Armino `psram_hal_config_init()` 在 sf_reset(1) 之后还置了 bit[1] (psram bypass)。
+  初版漏掉。
+- 🔴 <span style="color:#d1242f">**坑**</span> **只读 ID 没配 MR 寄存器** —
+  初版 `psram_try_detect()` 只做了 "写 mode → reset → 读 ID"，没有配置
+  PSRAM 颗粒自身的模式寄存器（MR0/MR4/MR8）。
+  后果: ID 可能读对，但 latency/drive/burst 没配，0x60000000 数据通路大概率不通。
+- 🟢 <span style="color:#1a7f37">**新增**</span> 已修正所有问题，并在
+  `bk7258-armino-port/SKILL.md` 的 ④ 条强化了硬规则:
+  "凡地址落在 0x440101xx 的 ana_reg*，一律走 ana_write()，禁止裸 putreg"
+- 🟢 <span style="color:#1a7f37">**新增**</span> NSH 命令入口 `bk7258_psram_main()`
+  从 arch 层移到了 `apps/examples/psram/`，arch 层只保留纯驱动 API
+
+> 待续:🟡 实测回贴串口输出 → 根据 ID 修正 board.h 的 BOARD_PSRAM_SIZE →
+> S2 读写验证与容量实测 → S3 堆集成方案确认。
+
+### 22.9 S1 实测通过 + 踩坑：repack 打包旧产物
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> S1 实测输出:
+  ```
+  nsh> psram id
+  psram: init OK, ID=0x8d08, size=16384 KB
+  psram: chip ID = 0x8d08
+  psram: size    = 16384 KB (16 MB)
+
+  nsh> psram probe
+  psram: init OK, ID=0x8d08, size=16384 KB
+  psram: data path OK (0x60000000 verified)
+  ```
+- 🟢 <span style="color:#1a7f37">**新增**</span> ID=0x8d08 → APS128XXO → 16MB。
+  证实 board.h 里的 8MB 是错的，已修正为 16MB。
+  data path OK 也证实颗粒 MR 配置那一步确实是必需的。
+- 🔴 <span style="color:#d1242f">**坑**</span> **repack.py 打包旧产物** —
+  首次烧录后 psram 命令在 NSH 里不存在。根因不是代码:
+  `repack.py:37` 硬编码 `NUTTX_BIN = cmake_out/bk7258-devkit_nsh/nuttx.bin`，
+  但改用专属仓 defconfig 后构建输出到 `cmake_out/contest2026_098_board_nsh/nuttx.bin`。
+  repack 打的是 08-11 的旧 nuttx.bin，烧进去的固件里只有 lcdtest。
+  现象极易误判成"代码没编进去"。
+- 🟢 <span style="color:#1a7f37">**新增**</span> `repack.py` 已参数化:
+  `--nuttx-bin <path>` / `NUTTX_BIN` 环境变量 / 自动推导 mtime 最新 / 兜底默认。
+  打包前打印路径+大小+mtime，超过 24 小时的文件会打印显著警告。
+  已同步加固 `bk7258-nuttx-bringup/SKILL.md`。
+
+> 待续:🟡 S2 读写验证与容量实测 → S3 堆集成方案确认。
