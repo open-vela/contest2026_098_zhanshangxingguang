@@ -91,6 +91,26 @@ static const lcd_pins_t g_lcd_right =
 
 static const lcd_pins_t *g_active_pins = &g_lcd_left;
 
+/****************************************************************************
+ * Cached GPIO pin state for fast bit-bang
+ *
+ * Instead of read-modify-write on every gpio_write() call, we cache the
+ * CFG base value (with OUTPUT=0) and register address at setup time.
+ * Setting a pin HIGH is then a single putreg32(base | OUTPUT_BIT).
+ ****************************************************************************/
+
+typedef struct
+{
+  uintptr_t addr;   /* BK7258_GPIO_CFG(pin) address */
+  uint32_t base_lo; /* CFG with OUTPUT bit cleared */
+  uint32_t base_hi; /* CFG with OUTPUT bit set */
+} gpio_cache_t;
+
+static gpio_cache_t g_cache_sclk;
+static gpio_cache_t g_cache_mosi;
+static gpio_cache_t g_cache_cs;
+static gpio_cache_t g_cache_dc;
+
 /* Display geometry */
 
 #define LCD_WIDTH      160
@@ -147,6 +167,44 @@ static void gpio_write(int pin, int val)
 }
 
 /****************************************************************************
+ * Name: gpio_set_output_cached
+ *
+ * Description:
+ *   Configure pin as GPIO output and cache the CFG register values
+ *   for fast putreg32-only writes (no getreg32 read needed later).
+ *
+ ****************************************************************************/
+
+static void gpio_set_output_cached(int pin, gpio_cache_t *c)
+{
+  uint32_t cfg;
+
+  c->addr = BK7258_GPIO_CFG(pin);
+  cfg = getreg32(c->addr);
+  cfg &= ~GPIO_CFG_SECOND_FUNC;
+  cfg &= ~GPIO_CFG_OUTPUT_EN;
+  cfg &= ~GPIO_CFG_INPUT_EN;
+  cfg &= ~GPIO_CFG_OUTPUT;   /* output = 0 */
+  putreg32(cfg, c->addr);
+  c->base_lo = cfg;            /* OUTPUT=0 */
+  c->base_hi = cfg | GPIO_CFG_OUTPUT; /* OUTPUT=1 */
+}
+
+/****************************************************************************
+ * Name: gpio_write_fast
+ *
+ * Description:
+ *   Set pin via cached values — no read-modify-write, just a single
+ *   putreg32.  ~2x faster than gpio_write().
+ *
+ ****************************************************************************/
+
+static inline void gpio_write_fast(const gpio_cache_t *c, int val)
+{
+  putreg32(val ? c->base_hi : c->base_lo, c->addr);
+}
+
+/****************************************************************************
  * Name: lcd_set_pins / lcd_setup_pins
  ****************************************************************************/
 
@@ -158,19 +216,32 @@ static void lcd_set_pins(const lcd_pins_t *pins)
 static void lcd_setup_pins(const lcd_pins_t *pins)
 {
   lcd_set_pins(pins);
-  gpio_set_output(pins->sclk);
-  gpio_set_output(pins->cs);
-  gpio_set_output(pins->mosi);
-  gpio_set_output(pins->dc);
   gpio_set_output(pins->rst);
-  gpio_write(pins->cs, 1);
-  gpio_write(pins->dc, 1);
-  gpio_write(pins->sclk, 0);
-  gpio_write(pins->mosi, 0);
+
+  /* Cache SCLK/MOSI/CS/DC for fast bit-bang */
+
+  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
+  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
+  gpio_set_output_cached(pins->cs,   &g_cache_cs);
+  gpio_set_output_cached(pins->dc,   &g_cache_dc);
+
+  /* Initial idle state: CS=HIGH, DC=HIGH, SCLK=LOW, MOSI=LOW */
+
+  gpio_write_fast(&g_cache_cs,   1);
+  gpio_write_fast(&g_cache_dc,   1);
+  gpio_write_fast(&g_cache_sclk, 0);
+  gpio_write_fast(&g_cache_mosi, 0);
 }
 
 /****************************************************************************
  * Name: spi_write_byte
+ *
+ * Description:
+ *   Bit-bang one byte, MSB-first, SPI mode 0.
+ *   Uses cached GPIO values (no getreg32 read) and no NOP delay.
+ *   GC9D01 can handle fast SPI clock; add back one spi_delay() if
+ *   display shows corruption.
+ *
  ****************************************************************************/
 
 static void spi_write_byte(uint8_t byte)
@@ -179,11 +250,9 @@ static void spi_write_byte(uint8_t byte)
 
   for (bit = 7; bit >= 0; bit--)
     {
-      gpio_write(g_active_pins->mosi, (byte >> bit) & 1);
-      spi_delay();
-      gpio_write(g_active_pins->sclk, 1);
-      spi_delay();
-      gpio_write(g_active_pins->sclk, 0);
+      gpio_write_fast(&g_cache_mosi, (byte >> bit) & 1);
+      gpio_write_fast(&g_cache_sclk, 1);
+      gpio_write_fast(&g_cache_sclk, 0);
     }
 }
 
@@ -193,24 +262,24 @@ static void spi_write_byte(uint8_t byte)
 
 static void lcd_send_cmd(uint8_t cmd)
 {
-  gpio_write(g_active_pins->dc, 0);
-  gpio_write(g_active_pins->cs, 0);
+  gpio_write_fast(&g_cache_dc, 0);
+  gpio_write_fast(&g_cache_cs, 0);
   spi_write_byte(cmd);
-  gpio_write(g_active_pins->cs, 1);
+  gpio_write_fast(&g_cache_cs, 1);
 }
 
 static void lcd_send_data(const uint8_t *data, int len)
 {
   int i;
 
-  gpio_write(g_active_pins->dc, 1);
-  gpio_write(g_active_pins->cs, 0);
+  gpio_write_fast(&g_cache_dc, 1);
+  gpio_write_fast(&g_cache_cs, 0);
   for (i = 0; i < len; i++)
     {
       spi_write_byte(data[i]);
     }
 
-  gpio_write(g_active_pins->cs, 1);
+  gpio_write_fast(&g_cache_cs, 1);
 }
 
 static void lcd_send_cmd_data(uint8_t cmd, const uint8_t *data, int len)
@@ -364,15 +433,15 @@ static void lcd_fill_rect(uint16_t x0, uint16_t y0,
   /* RAMWR + pixel data */
 
   lcd_send_cmd(0x2c);
-  gpio_write(g_active_pins->dc, 1);
-  gpio_write(g_active_pins->cs, 0);
+  gpio_write_fast(&g_cache_dc, 1);
+  gpio_write_fast(&g_cache_cs, 0);
   for (i = 0; i < npix; i++)
     {
       spi_write_byte(hi);
       spi_write_byte(lo);
     }
 
-  gpio_write(g_active_pins->cs, 1);
+  gpio_write_fast(&g_cache_cs, 1);
 }
 
 /****************************************************************************
@@ -891,8 +960,224 @@ static void eye_o_happy(void)
 }
 
 /****************************************************************************
- * Private Functions
+ * Smooth blink animation — incremental eyelid sweep
+ *
+ * Instead of jumping neutral → half → blink in 3 big frames, the eyelids
+ * sweep in ~10-12 small steps.  Each step only draws a narrow black band
+ * (closing) or redraws the revealed eye content (opening), so the per-step
+ * pixel count is tiny — even bit-bang can do it smoothly.
+ *
+ *   Closing: top lid descends from OEYE_NEUTRAL_TOP → OEYE_BLINK_TOP,
+ *            bottom lid ascends from OEYE_NEUTRAL_BOT → OEYE_BLINK_BOT.
+ *   Opening: reverse.
  ****************************************************************************/
+
+#define OEYE_BLINK_STEPS  10  /* number of animation sub-frames */
+
+/****************************************************************************
+ * Name: oeye_pixel_color
+ *
+ * Description:
+ *   Return the RGB565 color for pixel (px, py) in the eye content.
+ *   Checks highlight, pupil, iris, then falls back to background.
+ *
+ ****************************************************************************/
+
+static inline uint16_t oeye_pixel_color(int16_t px, int16_t py)
+{
+  int16_t ddx;
+  int16_t ddy;
+  int32_t d2;
+
+  /* Highlight 1 */
+
+  ddx = px - OEYE_HL1_X;
+  ddy = py - OEYE_HL1_Y;
+
+  if ((int32_t)ddx * ddx + (int32_t)ddy * ddy <=
+      (int32_t)OEYE_HL1_R * OEYE_HL1_R)
+    {
+      return OEYE_HL;
+    }
+
+  /* Highlight 2 */
+
+  ddx = px - OEYE_HL2_X;
+  ddy = py - OEYE_HL2_Y;
+
+  if ((int32_t)ddx * ddx + (int32_t)ddy * ddy <=
+      (int32_t)OEYE_HL2_R * OEYE_HL2_R)
+    {
+      return OEYE_HL;
+    }
+
+  /* Pupil */
+
+  ddx = px - 80;
+  ddy = py - 80;
+  d2 = (int32_t)ddx * ddx + (int32_t)ddy * ddy;
+
+  if (d2 <= (int32_t)OEYE_PUPIL_R * OEYE_PUPIL_R)
+    {
+      return OEYE_PUPIL;
+    }
+
+  /* Iris */
+
+  if (d2 <= (int32_t)OEYE_IRIS_R * OEYE_IRIS_R)
+    {
+      return OEYE_IRIS;
+    }
+
+  return OEYE_BG;
+}
+
+/****************************************************************************
+ * Name: oeye_draw_row_band
+ *
+ * Description:
+ *   Draw eye content (iris/pupil/highlights/bg) for rows y0..y1,
+ *   clipped to the iris bounding box X range.  Uses CASET/RASET once
+ *   and streams pixels row by row — much faster than lcd_fill_circle
+ *   per row.
+ *
+ ****************************************************************************/
+
+static void oeye_draw_row_band(int16_t y0, int16_t y1)
+{
+  uint8_t ca[4];
+  uint8_t ra[4];
+  uint8_t cmd[2];
+  int16_t x;
+  int16_t y;
+  int16_t x0 = OEYE_BOX_L;
+  int16_t x1 = OEYE_BOX_R;
+
+  /* CASET + RASET for the band */
+
+  ca[0] = (x0 >> 8) & 0xff;
+  ca[1] = x0 & 0xff;
+  ca[2] = (x1 >> 8) & 0xff;
+  ca[3] = x1 & 0xff;
+  lcd_send_cmd_data(0x2a, ca, 4);
+
+  ra[0] = (y0 >> 8) & 0xff;
+  ra[1] = y0 & 0xff;
+  ra[2] = (y1 >> 8) & 0xff;
+  ra[3] = y1 & 0xff;
+  lcd_send_cmd_data(0x2b, ra, 4);
+
+  /* RAMWR — stream pixels row by row */
+
+  lcd_send_cmd(0x2c);
+  gpio_write_fast(&g_cache_dc, 1);
+  gpio_write_fast(&g_cache_cs, 0);
+
+  for (y = y0; y <= y1; y++)
+    {
+      for (x = x0; x <= x1; x++)
+        {
+          uint16_t c = oeye_pixel_color(x, y);
+
+          cmd[0] = (c >> 8) & 0xff;
+          cmd[1] = c & 0xff;
+          spi_write_byte(cmd[0]);
+          spi_write_byte(cmd[1]);
+        }
+    }
+
+  gpio_write_fast(&g_cache_cs, 1);
+}
+
+/****************************************************************************
+ * Name: eye_o_blink_anim
+ *
+ * Description:
+ *   Smooth eyelid animation: close → brief hold → open.
+ *   Each step draws only the narrow newly-occluded/revealed strip,
+ *   so the per-step pixel count is small (160×~6px for 10 steps).
+ *
+ ****************************************************************************/
+
+static void eye_o_blink_anim(void)
+{
+  int step;
+  int16_t top_prev;
+  int16_t top_cur;
+  int16_t bot_prev;
+  int16_t bot_cur;
+
+  /* --- Phase 1: close (top lid descends, bottom lid ascends) --- */
+
+  top_prev = OEYE_NEUTRAL_TOP;
+  bot_prev = OEYE_NEUTRAL_BOT;
+
+  for (step = 1; step <= OEYE_BLINK_STEPS; step++)
+    {
+      /* Interpolate lid positions */
+
+      top_cur = OEYE_NEUTRAL_TOP +
+                (int16_t)((int32_t)(OEYE_BLINK_TOP - OEYE_NEUTRAL_TOP) *
+                          step / OEYE_BLINK_STEPS);
+      bot_cur = OEYE_NEUTRAL_BOT +
+                (int16_t)((int32_t)(OEYE_BLINK_BOT - OEYE_NEUTRAL_BOT) *
+                          step / OEYE_BLINK_STEPS);
+
+      /* Draw newly covered rows as black (only the delta strip) */
+
+      if (top_cur > top_prev)
+        {
+          lcd_fill_rect(OEYE_BOX_L, top_prev + 1,
+                        OEYE_BOX_R, top_cur, OEYE_LID);
+        }
+
+      if (bot_cur < bot_prev)
+        {
+          lcd_fill_rect(OEYE_BOX_L, bot_cur,
+                        OEYE_BOX_R, bot_prev - 1, OEYE_LID);
+        }
+
+      top_prev = top_cur;
+      bot_prev = bot_cur;
+    }
+
+  /* --- Phase 2: brief hold at fully closed --- */
+
+  up_mdelay(60);
+
+  /* --- Phase 3: open (top lid ascends, bottom lid descends) --- */
+
+  for (step = OEYE_BLINK_STEPS - 1; step >= 0; step--)
+    {
+      top_cur = OEYE_NEUTRAL_TOP +
+                (int16_t)((int32_t)(OEYE_BLINK_TOP - OEYE_NEUTRAL_TOP) *
+                          step / OEYE_BLINK_STEPS);
+      bot_cur = OEYE_NEUTRAL_BOT +
+                (int16_t)((int32_t)(OEYE_BLINK_BOT - OEYE_NEUTRAL_BOT) *
+                          step / OEYE_BLINK_STEPS);
+
+      /* Redraw revealed rows with eye content (only the delta strip) */
+
+      if (top_cur < top_prev)
+        {
+          oeye_draw_row_band(top_cur + 1, top_prev);
+        }
+
+      if (bot_cur > bot_prev)
+        {
+          oeye_draw_row_band(bot_prev, bot_cur - 1);
+        }
+
+      top_prev = top_cur;
+      bot_prev = bot_cur;
+    }
+
+  /* Restore the thin neutral eyelid strips (outside iris box) */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, OEYE_NEUTRAL_TOP, OEYE_LID);
+  lcd_fill_rect(0, OEYE_NEUTRAL_BOT, LCD_WIDTH - 1, LCD_HEIGHT - 1,
+                OEYE_LID);
+}
 
 /****************************************************************************
  * Name: lcdtest_stages
@@ -1792,17 +2077,15 @@ static int lcdtest_oeye(void)
 
   up_mdelay(1200);
 
-  /* --- Frame 3: fully closed (blink) --- */
+  /* --- Frame 3: smooth blink (incremental eyelid sweep) --- */
 
-  syslog(LOG_INFO, "[oeye] frame: BLINK\n");
+  syslog(LOG_INFO, "[oeye] frame: SMOOTH BLINK\n");
 
   lcd_set_pins(&g_lcd_left);
-  eye_o_blink();
+  eye_o_blink_anim();
   lcd_set_pins(&g_lcd_right);
-  eye_o_blink();
+  eye_o_blink_anim();
   lcd_set_pins(&g_lcd_left);
-
-  up_mdelay(800);
 
   /* --- Frame 4: back to neutral --- */
 
@@ -1846,6 +2129,116 @@ static int lcdtest_oeye(void)
 }
 
 /****************************************************************************
+ * Name: lcdtest_blink
+ *
+ * Description:
+ *   Preview smooth blink animation on both panels.
+ *   Usage: lcdtest blink [count]   (default 5 blinks)
+ *
+ ****************************************************************************/
+
+static int lcdtest_blink(int count)
+{
+  int pin;
+  int i;
+
+  /* Power-on non-LCD GPIOs */
+
+  for (pin = 0; pin <= 52; pin++)
+    {
+      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
+          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
+          pin == 24 || pin == 25 || pin == 29)
+        {
+          continue;
+        }
+
+      if (pin == 10 || pin == 11 || pin == 8 ||
+          pin == 20 || pin == 21 ||
+          pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      gpio_set_output(pin);
+      gpio_write(pin, 1);
+    }
+
+  up_mdelay(500);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* Left panel init */
+
+  lcd_setup_pins(&g_lcd_left);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* Right panel init */
+
+  lcd_setup_pins(&g_lcd_right);
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(false);
+  lcd_display_on();
+
+  /* White background */
+
+  lcd_set_pins(&g_lcd_left);
+  draw_oeye_bg();
+  lcd_set_pins(&g_lcd_right);
+  draw_oeye_bg();
+
+  syslog(LOG_INFO,
+         "[blink] === smooth blink preview: %d blinks ===\n", count);
+
+  /* Initial neutral on both panels */
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  up_mdelay(1000);
+
+  /* Blink loop */
+
+  for (i = 0; i < count; i++)
+    {
+      syslog(LOG_INFO, "[blink] blink %d/%d\n", i + 1, count);
+
+      lcd_set_pins(&g_lcd_left);
+      eye_o_blink_anim();
+      lcd_set_pins(&g_lcd_right);
+      eye_o_blink_anim();
+      lcd_set_pins(&g_lcd_left);
+
+      /* Brief pause between blinks */
+
+      up_mdelay(800 + (i % 3) * 400); /* vary rhythm slightly */
+    }
+
+  /* End neutral */
+
+  lcd_set_pins(&g_lcd_left);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_right);
+  eye_o_neutral();
+  lcd_set_pins(&g_lcd_left);
+
+  syslog(LOG_INFO, "[blink] done\n");
+  return OK;
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -1859,6 +2252,7 @@ static int lcdtest_oeye(void)
  *     lcdtest anim     — pupil tracking animation (3 rounds)
  *     lcdtest emo      — Cozmo/Vector expression eyes (2 rounds)
  *     lcdtest oeye     — official-website-style eye preview
+ *     lcdtest blink [N] — smooth blink preview (default 5 blinks)
  *     lcdtest hear     — sound localization → eye_look
  *     lcdtest mic      — raw ADC capture + RMS dump
  *     lcdtest pwr lo hi — power-on GPIO range for binary-search
@@ -1886,6 +2280,23 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "oeye") == 0)
     {
       return lcdtest_oeye();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "blink") == 0)
+    {
+      int count = 5;
+
+      if (argc > 2)
+        {
+          count = atoi(argv[2]);
+        }
+
+      if (count < 1)
+        {
+          count = 1;
+        }
+
+      return lcdtest_blink(count);
     }
 
   if (argc > 1 && strcmp(argv[1], "scan") == 0)
