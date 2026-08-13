@@ -1207,3 +1207,158 @@ PR 到 `open-vela/nuttx` 后, CI 的 `checkpatch`(nxstyle)对芯片层文件报�
   `cmake-format --check` 通过、源码/配置无中文、干净构建成功(nuttx.bin 179300 B)。
 
 > 待续:🔵 板级进专属仓 `contest2026_098_zhanshangxingguang`(英文名 + Signed-off-by + logs/)。
+
+---
+
+## 20. M2 显示:GC9D01 双眼圆屏 bring-up
+
+> 时间线:2026-08-08 ~ 08-11。目标从"点亮一块 160×160 圆屏"推进到"双眼表情动画"。
+
+### 20.1 硬件事实确认(先勘察再动手)
+
+从原理图 + ARMino SDK 交叉确认,避免猜引脚:
+
+| 项 | 结论 | 出处 |
+|---|---|---|
+| 屏型号 | **GC9D01,160×160,SPI** | ARMino `lcd_spi_gc9d01.c` 内 `lcd_device_gc9d01{.width=160,.height=160,.type=LCD_TYPE_SPI}` |
+| 双屏方案 | LCD1 + LCD2 各一路,12pin 座 CN5;**双屏方案无触摸**(触摸只在单屏 24pin 方案上) | 原理图 LCD 页 |
+| 引脚 | SCLK=GPIO_2 / CS=GPIO_3 / MOSI=GPIO_4 / DC=GPIO_5(借 QSPI1 脚)、RST=GPIO_29、BL=GPIO_25(经 Q3) | 原理图 + ARMino `gpio_map.h` |
+| 命令/数据 | GC9D01 用**独立 DC 脚**(不是 9-bit SPI):DC=L 命令,DC=H 数据;SPI mode 0,MSB first | GC9D01 datasheet + ARMino 驱动 |
+
+- 🔵 <span style="color:#0969da">**说明**</span> openvela 自带 `nuttx/drivers/lcd/gc9a01.c`(同族),初期作为初始化序列的对照基底。
+
+### 20.2 决策:先 bit-bang,不碰硬件 QSPI
+
+- 🔵 <span style="color:#0969da">**说明**</span> BK7258 的 QSPI 控制器在 openvela 侧尚无驱动,若先做控制器会把
+  "点屏"这件事的变量堆到两个(控制器 + 屏)。故**先用 bit-bang SPI 打通屏**,把引脚设为普通 GPIO 输出,
+  只验证屏本身与初始化序列。控制器/DMA 留作后续性能优化。
+- 🔵 <span style="color:#0969da">**说明**</span> 代价:帧率受限,做动画会吃紧(见 20.5 的优化)。
+
+### 20.3 分阶段调试命令(本项目最有效的排障模式)
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> `app/lcdtest/` 与板级 `src/bk7258_gc9d01.c`,通过
+  `CONFIG_EXAMPLES_LCDTEST` + `CONFIG_BUILTIN` + `CONFIG_NSH_BUILTIN_APPS` 暴露为 NSH 内建命令。
+- 🔵 <span style="color:#0969da">**说明**</span> **不在开机路径调用 bring-up**:bit-bang 初始化耗时,
+  放 `bk7258_bringup.c` 会阻塞启动、拖慢每次迭代。改为按需触发。
+
+命令分层设计(后续外设沿用此模式):
+
+```
+lcdtest            分阶段:A=背光  B=初始化  C=红色方块(最小可见输出)
+lcdtest go         一步到位的可靠上屏流程(生产路径)
+lcdtest scan       GPIO 扫描,定位未知的 LCD 电源使能脚
+lcdtest pwr lo hi  在给定 GPIO 区间内二分,缩小使能脚范围
+```
+
+- 🔵 <span style="color:#0969da">**说明**</span> `scan`/`pwr` 是为解决"背光亮但屏无内容"而加的:
+  当怀疑存在未知的电源/使能脚时,用扫描与二分替代逐个试错,显著缩短定位时间。
+  **经验**:这类"未知使能脚"在第三方开发板上很常见,值得把扫描能力做成常备工具。
+
+### 20.4 表情动画(从静态方块到会发光的眼睛)
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> `lcdtest emo` / `lcdtest anim`:发光式 emoji 眼动画。
+- 🟢 <span style="color:#1a7f37">**新增**</span> `lcdtest oeye`:接近原厂 demo 观感的"官方风格眼"。
+- 🔵 <span style="color:#0969da">**说明**</span> 之所以要对齐原厂观感:原厂 demo 已证明 160×160 画眼睛效果好,
+  以其为参照可先排除"是不是分辨率不够"的疑虑,把问题收敛到渲染实现上。
+
+### 20.5 bit-bang 提速:缓存 GPIO 配置寄存器
+
+- 🟡 <span style="color:#bf8700">**修改**</span> `src/bk7258_gc9d01.c`:引入 `gpio_cache_t`,
+  在 setup 阶段预先算出并缓存每个引脚的 CFG 寄存器地址与"OUTPUT=0 / OUTPUT=1"两个基值。
+
+```c
+typedef struct
+{
+  uintptr_t addr;    /* BK7258_GPIO_CFG(pin) address */
+  uint32_t  base_lo; /* CFG with OUTPUT bit cleared */
+  uint32_t  base_hi; /* CFG with OUTPUT bit set     */
+} gpio_cache_t;
+```
+
+- 🔵 <span style="color:#0969da">**说明**</span> 原实现每次 `gpio_write()` 都要**读-改-写**;
+  改为置位只需一次 `putreg32(base_hi)`。bit-bang 场景下每帧有大量位翻转,这一项对帧率影响明显。
+- 🔵 <span style="color:#0969da">**说明**</span> 仍属过渡方案。要支撑流畅双眼动画,**最终需换硬件 SPI/QSPI + DMA**。
+
+### 20.6 当前状态与遗留
+
+- ✅ 单屏点亮、初始化序列可靠、表情动画可跑
+- 🟡 **双屏尚未同时驱动**(第二块屏的片选/复位与刷新调度未实现)
+- 🟡 未接 `LCD_FRAMEBUFFER` / LVGL
+- 🔴 **阻塞项**:`CONFIG_MM_REGIONS` 仍为默认 1,**PSRAM(`0x60000000`) 未纳入堆**。
+  双屏双缓冲与后续摄像头帧缓冲都需要 PSRAM(GC2145 640×480 YUYV 单帧 ≈ 614KB,
+  远超 AP 侧 336KB SRAM)。→ 下一步优先打通 PSRAM 初始化 + `mm_addregion()`。
+
+> 待续:🔵 双屏并行刷新、framebuffer/LVGL 接入、硬件 SPI+DMA 替换 bit-bang。
+
+---
+
+## 21. 双麦音频采集与声源定位(寻声)
+
+> 时间线:2026-08-10 ~ 08-11。硬件前提:原装单麦已拔除,换装 **2 颗同型号咪头**(6027 ECM),
+> 分别接 M1 / M2 座(原理图 `CN7`/`CN9`,`HC-1.25-2PLT` 1.25mm)。
+
+### 21.1 为什么必须换成两颗同型号
+
+- 🔵 <span style="color:#0969da">**说明**</span> 出厂只装 1 颗麦(另一座空置),单麦无法判方位。
+- 🔵 <span style="color:#0969da">**说明**</span> 且**两麦必须同型号**:互相关测向依赖两路的相位与灵敏度一致性,
+  混用不同型号会引入固定相位偏差,直接劣化 TDOA 结果。故连原装那颗一并换掉,凑同款对。
+- 🔵 <span style="color:#0969da">**说明**</span> 麦克风为**带线外接**,间距由结构决定而非 PCB 固定
+  (座子间距仅 ~9.4mm,远不够)。设计目标:装到外壳两侧"耳朵"位,**间距 ≥60mm**。
+
+### 21.2 ⚠️ 根因级踩坑:模拟寄存器不是普通 MMIO
+
+这是本节最重要的发现,**漏掉会导致"代码看着全对但 ADC FIFO 恒空"**。
+
+- 🔴 <span style="color:#d1242f">**坑**</span> BK7258 的模拟寄存器(`ana_reg*`)写操作**要经一条串行总线下发**,
+  **每次写后必须轮询完成标志**,否则下一次写会把前一次挤掉 → 模拟前端始终配不上。
+- 🟢 <span style="color:#1a7f37">**新增**</span> `ana_write()` / `ana_setbit()` 封装,内部强制轮询写完成。
+
+```c
+/* WRONG —— 前一次还没下发完就被覆盖 */
+aud_putreg(v1, ANA_REG_X);
+aud_putreg(v2, ANA_REG_Y);
+
+/* RIGHT —— 每次写后轮询串行总线 */
+ana_write(ANA_REG_X, v1);
+ana_write(ANA_REG_Y, v2);
+```
+
+- 🔵 <span style="color:#0969da">**说明**</span> 症状极具误导性:寄存器**回读像是写进去了**,但模拟通路无效、
+  FIFO 无数据。若不知道这条,很容易误判为"时钟没开"或"引脚错"而反复绕圈。
+- 🔵 <span style="color:#0969da">**说明**</span> 出处:ARMino `aud_common_driver.c` + `aud_adc_driver.c` + `sys_ll.h`
+  (Beken,Apache-2.0),移植时已在文件头保留出处。
+
+### 21.3 实现内容
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> `src/bk7258_audio.{c,h}` —— 模拟音频 ADC **双通道**
+  (L=M1,R=M2)采集,**寄存器级、polling,无 DMA 无中断**。
+  - `audio_init()` / `audio_deinit()`:含 **APLL 锁定等待**
+  - `audio_capture(n)`:抓 n 个采样
+  - `compute_rms()`:RMS 能量
+  - `bk7258_mic_energy(n)`:能量查询
+  - `bk7258_mic_set_quiet(bool)`:静音门控
+- 🔵 <span style="color:#0969da">**说明**</span> 先用 polling 是刻意的:bring-up 阶段变量越少越好,
+  先证明"两路都能拿到波形"。**48kHz 双通道连续采集最终需上 DMA**,否则 CPU 占用过高。
+
+### 21.4 声源定位(互相关 TDOA)
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> `mic_locate_process(n, *out_tau_q8)` /
+  `bk7258_mic_locate(*out_tau_q8)`:对两路做**互相关**求时延差,输出 **Q8 定点**的 τ。
+- 🟢 <span style="color:#1a7f37">**新增**</span> 关键参数:
+  - `CORR_LAG_MAX 32` —— lag 搜索范围 `[-32, +32]` 采样
+  - `RMS_GATE 50` —— **静音门限**:两路能量均低于该值时直接判为"居中",避免静音下输出随机方位
+- 🔵 <span style="color:#0969da">**说明**</span> 只解**左右单轴**(双麦固有限制,存在前后镜像模糊)。
+  对"左右双眼设备把视线转向说话人"这一用途**恰好够用**。
+- 🟢 <span style="color:#1a7f37">**新增**</span> `bk7258_mic_main()` 暴露为命令,并接入 `lcdtest mic`,
+  可把测向结果直接驱动屏上眼球偏移,形成"听到声音→眼睛转过去"的闭环。
+
+### 21.5 当前状态与遗留
+
+- ✅ 双通道采集通、RMS 正常、互相关测向可输出 τ
+- 🟡 标注为 **WIP**:间距/角度标定未做(需外壳定位后按实际 60~65mm 间距标定)
+- 🟡 采样率与分辨力待优化:**建议取 48kHz**(16kHz 下 60mm 间距仅约 2.8 个采样,
+  分辨力不足);并加**抛物线亚采样插值**提升精度
+- 🟡 polling → **DMA** 待改造
+- 🟡 与喇叭同时工作时需验证回声/啸叫(结构上应隔离麦腔与喇叭腔;必要时启用芯片 AEC)
+
+> 待续:🔵 外壳定位后标定间距 → 48kHz + 亚采样插值 → DMA 化 → 与表情引擎联动做"听觉引导视觉"。
