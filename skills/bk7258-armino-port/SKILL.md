@@ -131,16 +131,37 @@ BK7258 的模拟寄存器（`ana_reg*`）**不是普通 MMIO**——写操作要
 
 漏掉的症状：**模拟前端配置完全不生效，ADC FIFO 恒为空**，而寄存器回读似乎"写进去了"。
 
-```c
-/* WRONG */
-aud_putreg(val, ANA_REG_X);
-aud_putreg(val2, ANA_REG_Y);   /* 前一次还没下发完，被丢弃 */
+**硬规则：凡地址落在 `0x440101xx` 的 `ana_reg*`，一律走 `ana_write()`，禁止裸
+`psram_putreg()` / `aud_putreg()`。** 这包括 PSRAM LDO（`ana_reg13`）、音频
+PLL（`ana_reg5`）等所有模拟控制寄存器。整寄存器盲写还会破坏同寄存器内其它模拟块的
+控制位——必须**逐 bit 读改写**。
 
-/* RIGHT */
-aud_putreg(val, ANA_REG_X);
-ana_wait_write_done();          /* 轮询串行总线完成 */
-aud_putreg(val2, ANA_REG_Y);
-ana_wait_write_done();
+```c
+/* WRONG — 两处错：裸写 + 整寄存器盲写 */
+psram_putreg(PSRAM_VOLTAGE_LDO_EN, SYS_ANA_REG13);
+
+/* RIGHT — 逐 bit 读改写 + SPI 轮询 */
+ana_rmw(SYS_ANA_REG13, 28, 0x1, 1);   /* psldo_swb = 1 */
+ana_rmw(SYS_ANA_REG13, 29, 0x3, 3);   /* vpsramsel = 3 */
+ana_rmw(SYS_ANA_REG13, 31, 0x1, 1);   /* enpsram = 1 */
+
+/* ana_write / ana_rmw 实现参考：bk7258_audio.c 或 bk7258_psram.c */
+static void ana_write(uintptr_t addr, uint32_t val)
+{
+  uint32_t idx = (addr - ANA_BASE) >> 2;  /* ANA_BASE = 0x44010100 */
+  psram_putreg(val, addr);
+  while (psram_getreg(ANA_SPI_STATE_REG) & (1u << idx))  /* @ 0x440100E8 */
+    {
+    }
+}
+
+static void ana_rmw(uintptr_t addr, int pos, uint32_t mask, uint32_t val)
+{
+  uint32_t reg = psram_getreg(addr);
+  reg &= ~(mask << pos);
+  reg |= ((val & mask) << pos);
+  ana_write(addr, reg);
+}
 ```
 
 ## 步骤 5：数据通路选型

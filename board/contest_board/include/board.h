@@ -66,7 +66,11 @@
 #define BOARD_DTCM_BASE        0x20000000  /* Per-core private DTCM */
 
 #define BOARD_PSRAM_BASE       0x60000000  /* PSRAM window (64MB) */
-#define BOARD_PSRAM_SIZE       (8 * 1024 * 1024)
+#define BOARD_PSRAM_SIZE       (16 * 1024 * 1024)  /* Measured: ID=0x8d08
+                                                     * (APS128XXO 16MB).
+                                                     * Was 8MB (suspect);
+                                                     * corrected after
+                                                     * S1 psram probe. */
 
 #define BOARD_FLASH_BASE       0x02000000  /* Flash XIP data base */
 #define BOARD_FLASH_SIZE       (8 * 1024 * 1024)
