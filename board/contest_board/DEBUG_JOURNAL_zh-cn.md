@@ -1503,3 +1503,53 @@ AP 侧只有 336KB SRAM（0x28010000 ~ +336KB），双屏双缓冲 + 摄像头�
   已同步加固 `bk7258-nuttx-bringup/SKILL.md`。
 
 > 待续:🟡 S2 读写验证与容量实测 → S3 堆集成方案确认。
+
+### 22.10 S2 实测通过：16MB 零错误 + 带宽发现
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> S2 实测输出:
+  ```
+  nsh> psram width
+  psram: init OK, ID=0x8d08, size=16384 KB
+    32-bit: OK
+    16-bit: OK (RGB565 framebuffer safe)
+    8-bit:  OK
+  psram width: all widths OK (8/16/32-bit)
+
+  nsh> psram alias
+  psram: init OK, ID=0x8d08, size=16384 KB
+    wrote 0x11111111 @ 0x60400000 (4 MB)
+    wrote 0x22222222 @ 0x60800000 (8 MB)
+    wrote 0x33333333 @ 0x60fff000 (16MB-4K)
+  psram alias: OK — no aliasing detected (16 MB usable)
+
+  nsh> psram test 1
+  psram: init OK, ID=0x8d08, size=16384 KB
+  psram test: range 0x60000000 - 0x600fffff (1024 KB, destructive)
+  psram test: 262144 words, 0 errors, 1843.2 / 1865.5 KB/s (wr/rd), 1.10 s total
+
+  nsh> psram test
+  psram: init OK, ID=0x8d08, size=16384 KB
+  psram test: range 0x60000000 - 0x60ffffff (16384 KB, destructive)
+  psram test: 4194304 words, 0 errors, 1768.3 / 1802.1 KB/s (wr/rd), 18.24 s total
+  ```
+- 🟢 <span style="color:#1a7f37">**新增**</span> 三个关键疑虑全部排除:
+  1. 窗口是否真映射 16MB → 是，无别名
+  2. 半字是否可用 → 是，RGB565 safe
+  3. 有无位错 → 4M words 零错误
+- 🟡 <span style="color:#d4a017">**发现**</span> **CPU 逐字带宽仅 ~1.8 MB/s**。
+  原因: BK7258 无 D-cache、无 burst 传输，每次 32-bit 读写都走完整
+  PSRAM 总线事务（命令+地址+数据+等待），延迟被吃满。
+  实测值: 写 1768 KB/s，读 1802 KB/s（16MB 全量测试）。
+- 🔴 <span style="color:#d1242f">**架构决策**</span> 基于带宽实测:
+  - **LCD 帧缓冲留在 SRAM** — 双眼双缓冲 200KB，放得进 336KB SRAM，
+    高频刷新需要快速访问
+  - **PSRAM 专供摄像头大缓冲** — GC2145 640×480 YUYV 单帧 614KB，
+    必须 PSRAM，大块低频访问对带宽不敏感
+  - 结论: 不把帧缓冲迁到 PSRAM，改为 S4 用 psram_malloc 申请摄像头缓冲
+- 🟢 <span style="color:#1a7f37">**新增**</span> 带宽显示 bug 修复:
+  旧代码 `mbps = size * TICK_PER_SEC / elapsed / (1024*1024)` 两个问题:
+  ① 写+读混合计时，实际带宽被稀释一倍
+  ② 整数除法截断导致 ~0 MB/s 显示
+  修复: 分别计时写/读，用 KB/s + 1 位小数
+
+> 待续:🟡 S3 堆集成（方案 B: 独立 PSRAM 堆）→ S4 摄像头缓冲验证。
