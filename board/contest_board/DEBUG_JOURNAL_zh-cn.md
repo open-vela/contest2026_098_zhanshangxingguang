@@ -1553,3 +1553,59 @@ AP 侧只有 336KB SRAM（0x28010000 ~ +336KB），双屏双缓冲 + 摄像头�
   修复: 分别计时写/读，用 KB/s + 1 位小数
 
 > 待续:🟡 S3 堆集成（方案 B: 独立 PSRAM 堆）→ S4 摄像头缓冲验证。
+
+### 22.11 S3 实测通过：独立 PSRAM 堆可用
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> S3 实测输出:
+  ```
+  nsh> psram heap
+  psram: init OK, ID=0x8d08, size=16384 KB
+  PSRAM heap status:
+    arena (total) : 16384 KB
+    allocated     : 376 B (堆元数据)
+    free chunks   : 1
+
+  nsh> psram alloc 1024
+  alloc: 1024 KB @ 0x60000178 (OK, slot 0)
+    verify: malloc(1024)=0x2801c5a8 (SRAM OK)
+
+  nsh> psram alloc 614
+  alloc: 614 KB @ 0x60100180 (OK, slot 1)
+
+  nsh> psram heap
+    allocated : 1638 KB (= 1024+614，精确吻合)
+
+  nsh> psram freeall
+  freeall: released 2 block(s)
+
+  nsh> psram heap
+    allocated : 376 B (回落到初始值，无碎片)
+  ```
+- 🟢 <span style="color:#1a7f37">**新增**</span> 方案 B 达成:
+  PSRAM 独立堆可用，主堆仍在 SRAM（malloc 返回 0x28xxxxxx）。
+  heap_init 内部自保（自动调 psram_init）修复生效。
+- 🟡 <span style="color:#d4a017">**接口契约教训**</span>
+  S2 的 heap_init 要求"调用方先 psram_init()"，多入口场景（heap/alloc）
+  必然漏掉。正确做法: 被调方内部幂等自保（g_psram_init_done 守卫）。
+  这是典型的隐式前置条件 bug，写 API 时要假设调用方什么都不知道。
+
+### 22.12 S4: 对齐分配 + 摄像头缓冲验证
+
+- 🟢 <span style="color:#1a7f37">**新增**</span> 新增 API:
+  `bk7258_psram_memalign(alignment, size)` — 封装 NuttX mm_memalign()，
+  支持 32/64 字节对齐，DVP DMA 必需。
+- 🟢 <span style="color:#1a7f37">**新增**</span> NSH 新命令:
+  - `psram align <A> <KB>` — 按指定对齐分配并验证
+  - `psram fbtest` — 摄像头场景一次性验证:
+    32 字节对齐 + 64 字节对齐各分配 614KB，读写压测，报告带宽
+- 🟡 <span style="color:#d4a017">**D-cache 前提**</span>
+  当前 defconfig 无 CONFIG_ARMV8M_DCACHE，无需 cache 维护。
+  已在 memalign 注释中标注: 一旦启用 D-cache，
+  DMA 写入 PSRAM 后必须 invalidate（arm_dcache_invalidate），
+  否则 CPU 读到旧 cache 行 = 数据损坏。
+- 🟢 <span style="color:#1a7f37">**架构决策确认**</span>
+  S2 带宽实测 ~1.8 MB/s 决定了分工:
+  - LCD 帧缓冲 → SRAM（高频刷新，200KB 放得下 336KB SRAM）
+  - 摄像头缓冲 → PSRAM（614KB 大块，DMA 写入+CPU 低频读取）
+
+> 待续:🟡 DVP 驱动移植（用 psram_memalign 申请摄像头缓冲）。
