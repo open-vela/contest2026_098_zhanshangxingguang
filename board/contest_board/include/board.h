@@ -40,11 +40,24 @@
 
 #define BOARD_XTAL_FREQUENCY   26000000    /* High-freq XTAL = 26 MHz */
 #define BOARD_XTALL_FREQUENCY  32768       /* Low-freq XTAL = 32.768 kHz */
-#define BOARD_CPU_FREQUENCY    480000000   /* DPLL output, 480 MHz */
+#define BOARD_DPLL_FREQUENCY   480000000   /* DPLL output, 480 MHz (max) */
 
-/* SysTick clock source frequency.  TODO(calibrate): the STAR-MC1 SysTick
- * source (CPU clock or a divider) must be checked against the actual clock
- * config; estimated from the CPU frequency for now.
+/* Actual CPU0 core clock after boot.  MEASURED, not assumed:
+ *
+ *   With BOARD_SYSTICK_CLOCK set to 480 MHz, "sleep 3" took 12 s and
+ *   "sleep 10" took 40 s -- a ratio of exactly 4.0.  SysTick runs off the
+ *   processor clock (CTRL.CLKSOURCE=1), so the core clock is 480/4 =
+ *   120 MHz.  The datasheet's "up to 480 MHz" is the DPLL/max rating, not
+ *   the post-reset core clock.
+ *
+ * Re-calibrate this (and re-check the PSRAM throughput figures) if the
+ * clock tree is ever reconfigured.
+ */
+
+#define BOARD_CPU_FREQUENCY    120000000   /* DPLL/4, measured 2026-08-14 */
+
+/* SysTick clock source frequency.  CALIBRATED 2026-08-14 (see above):
+ * STAR-MC1 SysTick with CTRL.CLKSOURCE=1 is fed by the core clock.
  */
 
 #define BOARD_SYSTICK_CLOCK    BOARD_CPU_FREQUENCY
