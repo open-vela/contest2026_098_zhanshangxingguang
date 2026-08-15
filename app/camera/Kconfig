@@ -1,0 +1,33 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+# Uses unique symbol EXAMPLES_GC2145_ID to avoid conflict with
+# upstream apps/examples/camera (which depends on DRIVERS_VIDEO).
+#
+
+config EXAMPLES_GC2145_ID
+	tristate "GC2145 camera ID test command"
+	default n
+	---help---
+		Phase 0 camera bring-up: read GC2145 chip ID registers
+		(0xF0/0xF1) via open-drain SCCB bit-bang.  Only verifies
+		sensor presence; does NOT implement video capture.
+
+if EXAMPLES_GC2145_ID
+
+config EXAMPLES_GC2145_ID_PROGNAME
+	string "Program name"
+	default "camera"
+	---help---
+		NSH command name.
+
+config EXAMPLES_GC2145_ID_PRIORITY
+	int "Task priority"
+	default 100
+
+config EXAMPLES_GC2145_ID_STACKSIZE
+	int "Stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+endif

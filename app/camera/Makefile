@@ -1,5 +1,5 @@
 ############################################################################
-# vendor/beken/boards/bk7258/bk7258-devkit/src/Make.defs
+# apps/examples/gc2145_id/Makefile
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
@@ -18,22 +18,13 @@
 #
 ############################################################################
 
-include $(TOPDIR)/Make.defs
+include $(APPDIR)/Make.defs
 
-CSRCS = bk7258_bringup.c bk7258_boardinitialize.c
+PROGNAME  = $(CONFIG_EXAMPLES_GC2145_ID_PROGNAME)
+PRIORITY  = $(CONFIG_EXAMPLES_GC2145_ID_PRIORITY)
+STACKSIZE = $(CONFIG_EXAMPLES_GC2145_ID_STACKSIZE)
+MODULE    = $(CONFIG_EXAMPLES_GC2145_ID)
 
-ifeq ($(CONFIG_BOARDCTL),y)
-CSRCS += bk7258_appinit.c
-endif
+MAINSRC = camera_main.c
 
-ifeq ($(CONFIG_LCD_GC9D01),y)
-CSRCS += bk7258_gc9d01.c
-endif
-
-ifeq ($(CONFIG_EXAMPLES_GC2145_ID),y)
-CSRCS += bk7258_camera.c
-endif
-
-DEPPATH += --dep-path board
-VPATH += :board
-CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)arch$(DELIM)$(CONFIG_ARCH)$(DELIM)src$(DELIM)board$(DELIM)board
+include $(APPDIR)/Application.mk

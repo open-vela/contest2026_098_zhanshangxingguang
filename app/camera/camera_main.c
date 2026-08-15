@@ -1,5 +1,5 @@
 /****************************************************************************
- * arch/arm/src/bk7258/bk7258_gc9d01.h
+ * app/camera/camera_main.c
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -18,30 +18,58 @@
  *
  ****************************************************************************/
 
-#ifndef __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_GC9D01_H
-#define __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_GC9D01_H
-
-/****************************************************************************
- * Included Files
- ****************************************************************************/
-
 #include <nuttx/config.h>
 
+#include <stdio.h>
+#include <string.h>
+
+#include <arch/board/bk7258_camera.h>
+
 /****************************************************************************
- * Public Function Prototypes
+ * Public Functions
  ****************************************************************************/
 
 /****************************************************************************
- * Name: bk7258_lcdtest_main
- *
- * Description:
- *   NSH command "lcdtest" — staged GC9D01 LCD bring-up.
- *   Stage A: backlight on (P25 high).
- *   Stage B: RST(P45) reset + GC9D01 init sequence.
- *   Stage C: fill a 40x40 red square at (60,60).
- *
+ * camera_main
  ****************************************************************************/
 
-int bk7258_lcdtest_main(int argc, char *argv[]);
+int main(int argc, char *argv[])
+{
+  if (argc < 2)
+    {
+      printf("Usage: camera <command>\n");
+      printf("Commands:\n");
+      printf("  id     — read GC2145 chip ID\n");
+      printf("  io     — DVP pin mux config/deconfig/readback\n");
+      printf("  init   — GC2145 RGB565 640x480 init (MCLK stays on)\n");
+      printf("  stop   — MCLK off, power off, restore pins\n");
+      printf("  buf    — PSRAM framebuf alloc + test pattern verify\n");
+      return 1;
+    }
 
-#endif /* __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_GC9D01_H */
+  if (strcmp(argv[1], "id") == 0)
+    {
+      return bk7258_camera_id();
+    }
+  else if (strcmp(argv[1], "io") == 0)
+    {
+      return bk7258_camera_io();
+    }
+  else if (strcmp(argv[1], "init") == 0)
+    {
+      return bk7258_camera_init();
+    }
+  else if (strcmp(argv[1], "stop") == 0)
+    {
+      return bk7258_camera_stop();
+    }
+  else if (strcmp(argv[1], "buf") == 0)
+    {
+      return bk7258_camera_buf();
+    }
+  else
+    {
+      printf("Unknown command: %s\n", argv[1]);
+      return 1;
+    }
+}

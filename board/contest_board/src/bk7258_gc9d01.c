@@ -26,7 +26,7 @@
  *   CS   = GPIO_3  (QSPI1_CSN, func6 — unused for bit-bang)
  *   MOSI = GPIO_4  (QSPI1_IO0, func6 — unused for bit-bang)
  *   DC   = GPIO_5  (QSPI1_IO1, func6 — unused for bit-bang)
- *   RST  = GPIO_29 (LCD_RST on schematic, pin 65)
+ *   RST  = GPIO_45 (LCD_RST on schematic — was wrongly P29/DVP_PCLK)
  *   BL   = GPIO_25 (LCD_BL_PWM via Q3)
  *
  * The GC9D01 uses a separate DC pin (not 9-bit SPI).  DC=LOW for command,
@@ -58,6 +58,10 @@
 #include "bk7258_gpio.h"
 #include "bk7258_audio.h"
 
+#ifdef CONFIG_EXAMPLES_GC2145_ID
+#  include <arch/board/bk7258_camera.h>
+#endif
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -79,7 +83,7 @@ typedef struct
 
 static const lcd_pins_t g_lcd_left =
 {
-  .sclk = 2, .cs = 3, .mosi = 4, .dc = 5, .rst = 29
+  .sclk = 2, .cs = 3, .mosi = 4, .dc = 5, .rst = 45
 };
 
 static const lcd_pins_t g_lcd_right =
@@ -1180,6 +1184,36 @@ static void eye_o_blink_anim(void)
 }
 
 /****************************************************************************
+ * Name: lcdtest_is_dvp_reserved_pin
+ *
+ * Description:
+ *   Check if a GPIO pin is in the DVP camera pin range (P29–P39).
+ *   These pins must never be driven by lcdtest GPIO loops because
+ *   they are routed to the GC2145 camera connector on the contest
+ *   board.  Driving them could damage the sensor or cause bus
+ *   contention.
+ *
+ *   Also protects SWD pins (P20, P21) and UART0 (P10, P11) as a
+ *   convenience — callers still check these explicitly for clarity.
+ *
+ ****************************************************************************/
+
+static bool lcdtest_is_dvp_reserved_pin(int pin)
+{
+  /* DVP camera connector: P29 through P39 inclusive.
+   * This range covers DVP_VS, DVP_HS, DVP_PCLK, DVP_MCLK,
+   * DVP_D[0:7], DVP_PWDNB, DVP_RST (depending on board routing).
+   */
+
+  if (pin >= 29 && pin <= 39)
+    {
+      return true;
+    }
+
+  return false;
+}
+
+/****************************************************************************
  * Name: lcdtest_stages
  *
  * Description:
@@ -1204,7 +1238,7 @@ static int lcdtest_stages(void)
   /* --- Stage B: reset + init --- */
 
   syslog(LOG_INFO,
-         "[lcdtest] Stage B: RST(P29) reset + GC9D01 init\n");
+         "[lcdtest] Stage B: RST(P45) reset + GC9D01 init\n");
 
   lcd_setup_pins(&g_lcd_left);
 
@@ -1250,6 +1284,16 @@ static int lcdtest_scan(void)
 {
   int pin;
 
+#ifdef CONFIG_EXAMPLES_GC2145_ID
+  if (bk7258_camera_dvp_active())
+    {
+      syslog(LOG_ERR,
+             "[lcdtest] refused: DVP pins P29-P39 are in use, "
+             "run 'camera stop' first\n");
+      return -EBUSY;
+    }
+#endif
+
   /* Backlight on first */
 
   gpio_set_output(LCD_PIN_BL);
@@ -1293,6 +1337,15 @@ static int lcdtest_scan(void)
           continue;
         }
 
+      /* Skip DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
+        {
+          syslog(LOG_INFO,
+                 "[scan] pin=%d skipped (DVP camera reserved)\n", pin);
+          continue;
+        }
+
       gpio_set_output(pin);
       gpio_write(pin, 1);
       up_mdelay(800);
@@ -1328,6 +1381,16 @@ static int lcdtest_pwr(int lo, int hi)
   int off = 0;
   char pinbuf[256];
 
+#ifdef CONFIG_EXAMPLES_GC2145_ID
+  if (bk7258_camera_dvp_active())
+    {
+      syslog(LOG_ERR,
+             "[lcdtest] refused: DVP pins P29-P39 are in use, "
+             "run 'camera stop' first\n");
+      return -EBUSY;
+    }
+#endif
+
   /* Step 1: drive GPIO lo..hi high, skip reserved pins.
    * Collect the actual pin list for the syslog dump.
    */
@@ -1342,7 +1405,7 @@ static int lcdtest_pwr(int lo, int hi)
 
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -1371,6 +1434,13 @@ static int lcdtest_pwr(int lo, int hi)
       /* SWD debug port: SWCLK=20, SWDIO=21 */
 
       if (pin == 20 || pin == 21)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -1452,6 +1522,16 @@ static int lcdtest_go(void)
   int pin;
   int count = 0;
 
+#ifdef CONFIG_EXAMPLES_GC2145_ID
+  if (bk7258_camera_dvp_active())
+    {
+      syslog(LOG_ERR,
+             "[lcdtest] refused: DVP pins P29-P39 are in use, "
+             "run 'camera stop' first\n");
+      return -EBUSY;
+    }
+#endif
+
   /* Step 1: drive GPIO 0-52 high, skip reserved pins */
 
   syslog(LOG_INFO,
@@ -1463,7 +1543,7 @@ static int lcdtest_go(void)
 
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -1492,6 +1572,13 @@ static int lcdtest_go(void)
       /* SWD debug port: SWCLK=20, SWDIO=21 */
 
       if (pin == 20 || pin == 21)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -1580,7 +1667,7 @@ static int lcdtest_anim(void)
     {
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -1588,6 +1675,13 @@ static int lcdtest_anim(void)
       if (pin == 10 || pin == 11 || pin == 8 ||
           pin == 20 || pin == 21 ||
           pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -1709,7 +1803,7 @@ static int lcdtest_emo(void)
     {
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -1717,6 +1811,13 @@ static int lcdtest_emo(void)
       if (pin == 10 || pin == 11 || pin == 8 ||
           pin == 20 || pin == 21 ||
           pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -1863,7 +1964,7 @@ static int lcdtest_hear(void)
     {
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -1871,6 +1972,13 @@ static int lcdtest_hear(void)
       if (pin == 10 || pin == 11 || pin == 8 ||
           pin == 20 || pin == 21 ||
           pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -1998,7 +2106,7 @@ static int lcdtest_oeye(void)
     {
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -2006,6 +2114,13 @@ static int lcdtest_oeye(void)
       if (pin == 10 || pin == 11 || pin == 8 ||
           pin == 20 || pin == 21 ||
           pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }
@@ -2148,7 +2263,7 @@ static int lcdtest_blink(int count)
     {
       if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
           pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 29)
+          pin == 24 || pin == 25 || pin == 45)
         {
           continue;
         }
@@ -2156,6 +2271,13 @@ static int lcdtest_blink(int count)
       if (pin == 10 || pin == 11 || pin == 8 ||
           pin == 20 || pin == 21 ||
           pin == 38 || pin == 39)
+        {
+          continue;
+        }
+
+      /* DVP camera connector: P29–P39 */
+
+      if (lcdtest_is_dvp_reserved_pin(pin))
         {
           continue;
         }

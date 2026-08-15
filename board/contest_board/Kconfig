@@ -1,24 +1,52 @@
-#
-# For a description of the syntax of this configuration file,
-# see the file kconfig-language.txt in the NuttX tools repository.
-#
-# BK7258 DevKit board configuration options
-#
+menu "Board Contest Board Configuration"
 
-if ARCH_BOARD_CUSTOM
-
-config BK7258_DEVKIT_LCD
-	bool "Enable BK7258 DevKit QSPI LCD"
+config BOARD_CONTEST2026_098
+	bool "Enable Contest2026 098 Board Support"
 	default n
-	# TODO(M3): add dependencies per panel type, e.g.:
-	# select SPI
-	# select LCD
-	# select LCD_DEV
-	# select LCD_FRAMEBUFFER
-	---help---
-		Enable the on-board QSPI LCD support (M3, requires M1/M2 first).
-		See vendor/espressif/boards/esp32s3/esp32s3-eye for a ST7789 +
-		LCD_FRAMEBUFFER reference.
+
+menu "GPIO Pin Configuration"
+
+config CONTEST_BOARD_GPIO_LED
+	int "LED GPIO Pin"
+	default 47
+
+config CONTEST_BOARD_GPIO_KEY_LEFT
+	int "Left Key GPIO Pin"
+	default 26
+
+config CONTEST_BOARD_GPIO_KEY_RIGHT
+	int "Right Key GPIO Pin"
+	default 41
+
+config CONTEST_BOARD_GPIO_SPI_CS
+	int "SPI CS GPIO Pin"
+	default 0
+
+config CONTEST_BOARD_GPIO_SPI_CLK
+	int "SPI CLK GPIO Pin"
+	default 1
+
+config CONTEST_BOARD_GPIO_SPI_MOSI
+	int "SPI MOSI GPIO Pin"
+	default 8
+
+config CONTEST_BOARD_GPIO_I2S_LRCLK
+	int "I2S LRCLK GPIO Pin"
+	default 46
+
+config CONTEST_BOARD_GPIO_I2S_BCLK
+	int "I2S BCLK GPIO Pin"
+	default 9
+
+config CONTEST_BOARD_GPIO_I2S_DI
+	int "I2S Data In GPIO Pin"
+	default 12
+
+config CONTEST_BOARD_GPIO_I2S_MCLK
+	int "I2S MCLK GPIO Pin"
+	default 13
+
+endmenu # GPIO Pin Configuration
 
 config LCD_GC9D01
 	bool "GC9D01 160x160 RGB565 LCD (bit-bang SPI)"
@@ -28,4 +56,110 @@ config LCD_GC9D01
 		Uses bit-bang SPI on QSPI1 pins (GPIO 2-5) with separate
 		DC pin.  Fills screen with red on boot as a smoke test.
 
-endif # ARCH_BOARD_CUSTOM
+menu "GC2145 Camera Configuration"
+
+comment "Board-level facts from schematic — DO NOT change without schematic revision"
+
+config CAMERA_GPIO_SDA
+	int "SCCB SDA GPIO Pin"
+	default 43
+	---help---
+		AIDK schematic: SDA=P43 (IIC2_SDA), R36 10K pull-up.
+		DO NOT swap with SCL.
+
+config CAMERA_GPIO_SCL
+	int "SCCB SCL GPIO Pin"
+	default 42
+	---help---
+		AIDK schematic: SCL=P42 (IIC2_SCL), R38 10K pull-up.
+		DO NOT swap with SDA.
+
+config CAMERA_GPIO_RST
+	int "Camera RST GPIO Pin"
+	default 28
+	---help---
+		AIDK schematic: DVP_RST=P28, R39 10K pull-up, active-low.
+
+config CAMERA_GPIO_PWR_CTL
+	int "Camera Power Control GPIO Pin"
+	default 49
+	---help---
+		AIDK schematic: DVP_PWR_CTL=P49, R31 100K pull-down (default off).
+		Active-high enables Camera LDO 2.8V (U4) and DVDD 1.8V (U5).
+
+config CAMERA_GPIO_PWDNB
+	int "Camera PWDNB GPIO Pin"
+	default -1
+	---help---
+		AIDK schematic: PWDNB NOT connected to MCU (R40 10K bias, R41 NC).
+		Hardwired, not MCU-controlled. Leave as -1 (unconfigured).
+
+config CAMERA_MCLK_GPIO
+	int "Camera MCLK GPIO Pin"
+	default 27
+	---help---
+		AIDK schematic: DVP_MCLK=P27. Code hard-codes P27 for MCLK.
+
+comment "SCCB confirmation — check only after verifying with logic analyzer"
+
+config CAMERA_SCCB_CONFIRMED
+	bool "I2C bus has been verified with logic analyzer"
+	default n
+	---help---
+		MUST be verified before first camera power-on.
+		Verify: SDA waveform, SCL frequency, ACK from 0x3C.
+
+config CAMERA_SDA_SCL_ROLE_CONFIRMED
+	bool "SDA/SCL pin assignment verified (not swapped)"
+	default n
+	---help---
+		Verify with scope: SCL=P42 always output, SDA=P43 changes direction.
+
+config CAMERA_RST_GPIO_CONFIRMED
+	bool "RST pin confirmed on correct GPIO"
+	default n
+
+config CAMERA_RST_POLARITY_CONFIRMED
+	bool "RST active level verified against schematic"
+	default n
+	---help---
+		Schematic: R39 10K pull-up → RST is active-low.
+
+config CAMERA_RST_ACTIVE_LOW
+	bool "RST is active-low (pull-up default)"
+	default y
+	depends on CAMERA_RST_POLARITY_CONFIRMED
+	---help---
+		y = drive LOW to assert reset, release(HIGH) to deassert.
+		Schematic: R39 10K pull-up → active-low.
+
+config CAMERA_PWR_CONFIRMED
+	bool "PWR net identified in schematic"
+	default n
+
+config CAMERA_PWR_POLARITY_CONFIRMED
+	bool "PWR active level verified against schematic"
+	default n
+	---help---
+		Schematic: R31 100K pull-down → PWR is active-high.
+
+config CAMERA_PWR_ACTIVE_HIGH
+	bool "PWR_CTL is active-high (pull-down default)"
+	default y
+	depends on CAMERA_PWR_POLARITY_CONFIRMED
+	---help---
+		y = drive HIGH to power on camera LDO.
+		Schematic: R31 100K pull-down → active-high.
+
+comment "MCLK — check only after verifying MCLK output on P27"
+
+config CAMERA_MCLK_CONFIRMED
+	bool "MCLK output verified on P27"
+	default n
+	---help---
+		Single safety gate for MCLK: when n, mclk_enable_24mhz()
+		is never called. No separate MCLK_INIT needed.
+
+endmenu # GC2145 Camera Configuration
+
+endmenu # Board Contest Board Configuration
