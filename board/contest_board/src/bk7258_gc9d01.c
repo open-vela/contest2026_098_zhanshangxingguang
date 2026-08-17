@@ -66,9 +66,10 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Shared pin */
+/* Shared pins */
 
-#define LCD_PIN_BL     25
+#define LCD_PIN_BL        25
+#define LCD_PIN_LDO33_EN  52   /* U3 ME6211C33 LDO enable — LCD 3V3 supply */
 
 /* Per-panel pin descriptor */
 
@@ -446,6 +447,144 @@ static void lcd_fill_rect(uint16_t x0, uint16_t y0,
     }
 
   gpio_write_fast(&g_cache_cs, 1);
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_blit_rgb565
+ *
+ * Description:
+ *   Blit a full RGB565 framebuffer to the LCD.
+ *   Sends CASET/RASET/RAMWR then streams pixel data in rows.
+ *
+ *   No scaling — the buffer must match w×h exactly.
+ *   Buffer layout: big-endian RGB565 (high byte first), row-major.
+ *
+ *   Public so camera preview can call it.
+ *
+ ****************************************************************************/
+
+void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
+                             uint16_t w, uint16_t h,
+                             const uint8_t *rgb565)
+{
+  uint8_t ca[4];
+  uint8_t ra[4];
+  uint16_t x1 = x0 + w - 1;
+  uint16_t y1 = y0 + h - 1;
+  int row;
+  int row_bytes = (int)w * 2;
+
+  /* CASET */
+
+  ca[0] = (x0 >> 8) & 0xff;
+  ca[1] = x0 & 0xff;
+  ca[2] = (x1 >> 8) & 0xff;
+  ca[3] = x1 & 0xff;
+  lcd_send_cmd_data(0x2a, ca, 4);
+
+  /* RASET */
+
+  ra[0] = (y0 >> 8) & 0xff;
+  ra[1] = y0 & 0xff;
+  ra[2] = (y1 >> 8) & 0xff;
+  ra[3] = y1 & 0xff;
+  lcd_send_cmd_data(0x2b, ra, 4);
+
+  /* RAMWR + pixel data, one row at a time */
+
+  lcd_send_cmd(0x2c);
+
+  for (row = 0; row < (int)h; row++)
+    {
+      gpio_write_fast(&g_cache_dc, 1);
+      gpio_write_fast(&g_cache_cs, 0);
+
+      const uint8_t *rowp = rgb565 + row * row_bytes;
+      int i;
+      for (i = 0; i < row_bytes; i++)
+        {
+          spi_write_byte(rowp[i]);
+        }
+
+      gpio_write_fast(&g_cache_cs, 1);
+    }
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_preview_init
+ *
+ * Description:
+ *   Initialize the left-screen LCD for camera preview use.
+ *   Enables LDO_3V3 (P52), backlight (P25), configures SPI pins,
+ *   resets GC9D01, runs init sequence, turns display on, fills
+ *   with black to confirm screen is alive.
+ *
+ *   Reuses the same static functions that lcdtest uses — no
+ *   duplicated init sequence.
+ *
+ *   Safe to call even if lcdtest has previously run — pin setup
+ *   is idempotent (gpio_set_output + cached values).
+ *
+ * Returns:
+ *   0 on success.
+ *
+ ****************************************************************************/
+
+int bk7258_lcd_preview_init(void)
+{
+  /* LCD 3.3V power supply — P52 enables U3 (ME6211C33 LDO) */
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);   /* wait for LDO output to stabilize */
+
+  /* Backlight on */
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* Configure left-screen SPI pins (P2/P3/P4/P5/P45) */
+
+  lcd_setup_pins(&g_lcd_left);
+
+  /* Hardware reset: RST low → 15ms → RST high → 120ms */
+
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+
+  /* GC9D01 init sequence with display_on */
+
+  lcd_init_sequence(true);
+
+  /* Fill black to confirm screen is alive */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+
+  syslog(LOG_INFO,
+         "[lcd] preview init done — screen should show black\n");
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_preview_deinit
+ *
+ * Description:
+ *   Release LCD resources after camera preview.
+ *   Turns off backlight only.  P52 (LDO_3V3) stays on because
+ *   other peripherals may depend on the 3.3V rail.
+ *
+ ****************************************************************************/
+
+void bk7258_lcd_preview_deinit(void)
+{
+  /* Backlight off — leave LDO_3V3 enabled */
+
+  gpio_write(LCD_PIN_BL, 0);
+
+  syslog(LOG_INFO, "[lcd] preview deinit — backlight off\n");
 }
 
 /****************************************************************************
@@ -1223,10 +1362,14 @@ static bool lcdtest_is_dvp_reserved_pin(int pin)
 
 static int lcdtest_stages(void)
 {
-  /* --- Stage A: backlight --- */
+  /* --- Stage A: power + backlight --- */
 
   syslog(LOG_INFO,
-         "[lcdtest] Stage A: backlight ON (P25 high)\n");
+         "[lcdtest] Stage A: LDO_3V3 ON (P52) + backlight ON (P25)\n");
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);   /* wait for LDO output to stabilize */
 
   gpio_set_output(LCD_PIN_BL);
   gpio_write(LCD_PIN_BL, 1);
@@ -1240,6 +1383,8 @@ static int lcdtest_stages(void)
   syslog(LOG_INFO,
          "[lcdtest] Stage B: RST(P45) reset + GC9D01 init\n");
 
+  /* --- Left screen --- */
+
   lcd_setup_pins(&g_lcd_left);
 
   gpio_write(g_active_pins->rst, 0);
@@ -1248,21 +1393,47 @@ static int lcdtest_stages(void)
   up_mdelay(120);
 
   lcd_init_sequence(true);
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
 
   syslog(LOG_INFO,
-         "[lcdtest] Stage B done - panel initialized\n");
+         "[lcdtest] Stage B done - left panel initialized + cleared\n");
 
-  /* --- Stage C: 40x40 red square --- */
+  /* --- Right screen --- */
+
+  lcd_setup_pins(&g_lcd_right);
+
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(10);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+
+  lcd_init_sequence(true);
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
 
   syslog(LOG_INFO,
-         "[lcdtest] Stage C: fill 40x40 red at (60,60)\n");
+         "[lcdtest] Stage B done - right panel initialized + cleared\n");
+
+  /* --- Stage C: 40x40 red square on both screens --- */
+
+  syslog(LOG_INFO,
+         "[lcdtest] Stage C: fill 40x40 red at (60,60) on both screens\n");
+
+  /* Left screen — currently active from Stage B */
 
   lcd_fill_rect(60, 60,
                 60 + SQ_SIZE - 1, 60 + SQ_SIZE - 1,
                 0xf800);
 
+  /* Right screen — switch SPI to right panel, draw, switch back */
+
+  lcd_setup_pins(&g_lcd_right);
+  lcd_fill_rect(60, 60,
+                60 + SQ_SIZE - 1, 60 + SQ_SIZE - 1,
+                0xf800);
+  lcd_setup_pins(&g_lcd_left);
+
   syslog(LOG_INFO,
-         "[lcdtest] Stage C done - look for red square\n");
+         "[lcdtest] Stage C done - look for red square on both screens\n");
 
   return OK;
 }
