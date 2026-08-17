@@ -63,7 +63,7 @@ int bk7258_camera_io(void);
  *
  * Description:
  *   Phase 1 Step 2: power on, MCLK, reset, read chip ID, write GC2145
- *   init table (RGB565 640x480), readback verify.
+ *   init table (YUYV 640x480), readback verify.
  *   MCLK and power are left ON after success (for oscilloscope verify).
  *
  * Returns:
@@ -113,5 +113,53 @@ int bk7258_camera_buf(void);
  ****************************************************************************/
 
 bool bk7258_camera_dvp_active(void);
+
+/****************************************************************************
+ * Name: bk7258_camera_sync
+ *
+ * Description:
+ *   Phase 1 Round 2 Step 4a: DVP controller config + interrupt counting.
+ *   Configures CIS controller, attaches VSYNC/YUV_ARRIVED ISR, waits
+ *   for 10 VSYNC edges (5s timeout).  Restores all on exit.
+ *
+ * Prerequisites:
+ *   camera init (MCLK on, GC2145 configured) + camera buf (PSRAM ready).
+ *
+ * Returns:
+ *   0 on success (VSYNC edges detected), negative errno on failure.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_sync(void);
+
+/****************************************************************************
+ * Name: bk7258_camera_grab
+ *
+ * Description:
+ *   Phase 1 Round 2 Step 4b: DMA single frame capture to PSRAM.
+ *   Fills buf[0] with 0x5A, configures CIS controller, waits for one
+ *   complete frame (YUV_ARRIVED), hexdumps first 256 bytes.  Restores
+ *   all on exit.
+ *
+ * Prerequisites:
+ *   camera init + camera buf.
+ *
+ * Returns:
+ *   0 on success (frame captured), negative errno on failure.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_grab(void);
+
+int bk7258_camera_stream(int n_frames);
+int bk7258_camera_preview(int n_frames);
+int bk7258_camera_dump(void);
+int bk7258_camera_testpat(void);
+
+void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
+                             uint16_t w, uint16_t h,
+                             const uint8_t *rgb565);
+int bk7258_lcd_preview_init(void);
+void bk7258_lcd_preview_deinit(void);
 
 #endif /* __BOARD_CONTEST_BOARD_SRC_BK7258_CAMERA_H */

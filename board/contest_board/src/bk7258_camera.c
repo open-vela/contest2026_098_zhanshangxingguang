@@ -22,7 +22,7 @@
  * GC2145 Phase 1 — DVP IO + sensor init + PSRAM framebuf
  *
  * Phase 0: "camera id" — reads GC2145 chip ID via SCCB bit-bang
- * Phase 1: DVP data pin mux (P29-P39), GC2145 RGB565 init, PSRAM buffer
+ * Phase 1: DVP data pin mux (P29-P39), GC2145 YUYV init, PSRAM buffer
  *
  * BK7258 GPIO CFG register (per-pin, at AON_GPIO_BASE + pin*4):
  *   bit[0]   gpio_input     (RO) — reads pin level
@@ -43,7 +43,8 @@
  *
  * GC2145 init table:
  *   Ported from ARMino dvp_gc2145.c (Apache-2.0, Galois Inc)
- *   Output format: reg 0x84 = 0x06 (RGB565), 640x480
+ *   Output format: reg 0x84 = 0x02, 640x480
+ *   Actual PSRAM byte order: UYVY (verified by camera dump)
  *
  ****************************************************************************/
 
@@ -57,6 +58,8 @@
 #include <debug.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/irq.h>
+#include <nuttx/spinlock.h>
 
 #include "bk7258_gpio.h"
 #include "bk7258_psram.h"
@@ -64,6 +67,119 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* CIS Controller (YUV_BUF) Register Base Address
+ * From ARMino yuv_buf_reg.h: SOC_YUV_BUF_REG_BASE = 0x48020000
+ * SOC_ADDR_OFFSET = 0 for non-secure world.
+ */
+
+#define YUV_BUF_REG_BASE          0x48020000u
+
+/* Register offsets (word-addressed, multiply by 4 for byte offset) */
+
+#define YUV_BUF_REG_0x04          (YUV_BUF_REG_BASE + 0x04 * 4)  /* CTRL */
+#define YUV_BUF_REG_0x05          (YUV_BUF_REG_BASE + 0x05 * 4)  /* PIXEL */
+#define YUV_BUF_REG_0x08          (YUV_BUF_REG_BASE + 0x08 * 4)  /* EM_BASE_ADDR */
+#define YUV_BUF_REG_0x09          (YUV_BUF_REG_BASE + 0x09 * 4)  /* INT_EN */
+#define YUV_BUF_REG_0x0a          (YUV_BUF_REG_BASE + 0x0a * 4)  /* INT_STATUS */
+
+/* CTRL register (0x04) bit fields */
+
+#define YUV_BUF_CTRL_YUV_MODE     (1u << 0)   /* bit[0]: 1=YUV buf mode */
+#define YUV_BUF_CTRL_FMT_SEL_MASK 0x6u        /* bit[2:1]: YUV format */
+#define YUV_BUF_CTRL_FMT_YUYV     (0u << 1)   /* 00=YUYV */
+#define YUV_BUF_CTRL_FMT_UYVY     (1u << 1)   /* 01=UYVY */
+#define YUV_BUF_CTRL_FMT_YYUV     (2u << 1)   /* 10=YYUV */
+#define YUV_BUF_CTRL_FMT_UVYY     (3u << 1)   /* 11=UVYY */
+#define YUV_BUF_CTRL_H264_MODE    (1u << 3)   /* bit[3] */
+#define YUV_BUF_CTRL_MCLK_HOLD    (1u << 4)   /* bit[4] */
+#define YUV_BUF_CTRL_VCK_EDGE     (1u << 5)   /* bit[5]: PCLK edge */
+#define YUV_BUF_CTRL_HSYNC_REV    (1u << 6)   /* bit[6]: invert HSYNC */
+#define YUV_BUF_CTRL_VSYNC_REV    (1u << 7)   /* bit[7]: invert VSYNC */
+#define YUV_BUF_CTRL_SOI_HSYNC    (1u << 8)   /* bit[8] */
+#define YUV_BUF_CTRL_BPS_CIS      (1u << 9)   /* bit[9] */
+#define YUV_BUF_CTRL_MEMREV       (1u << 10)  /* bit[10] */
+#define YUV_BUF_CTRL_BYTE_REV     (1u << 11)  /* bit[11] */
+#define YUV_BUF_CTRL_JPEG_WRD_REV (1u << 12)  /* bit[12] */
+#define YUV_BUF_CTRL_PARTIAL_EN   (1u << 13)  /* bit[13] */
+#define YUV_BUF_CTRL_SYNC_EDGE    (1u << 14)  /* bit[14] */
+#define YUV_BUF_CTRL_MCLK_DIV_MASK 0x30000u   /* bit[17:16] */
+#define YUV_BUF_CTRL_MCLK_DIV_POS  16
+
+/* PIXEL register (0x05) bit fields */
+
+#define YUV_BUF_PIXEL_X_MASK      0xFFu       /* bit[7:0]: x_pixel (width/8) */
+#define YUV_BUF_PIXEL_Y_MASK      0xFF00u     /* bit[15:8]: y_pixel (height/8) */
+#define YUV_BUF_PIXEL_Y_POS       8
+#define YUV_BUF_PIXEL_BLK_MASK    0xFFFF0000u /* bit[31:16]: frame_blk */
+#define YUV_BUF_PIXEL_BLK_POS     16
+
+/* INT_EN register (0x09) bit fields */
+
+#define YUV_BUF_INT_VSYNC_NEGE    (1u << 0)   /* VSYNC falling edge */
+#define YUV_BUF_INT_YUV_ARV       (1u << 1)   /* YUV arrived (frame done) */
+#define YUV_BUF_INT_SM0_WR        (1u << 2)   /* SM0 write */
+#define YUV_BUF_INT_SM1_WR        (1u << 3)   /* SM1 write */
+#define YUV_BUF_INT_FIFO_FULL     (1u << 4)   /* FIFO full */
+#define YUV_BUF_INT_ENC_LINE_DONE (1u << 5)   /* encode line done */
+#define YUV_BUF_INT_RES_ERR       (1u << 6)   /* resolution error */
+#define YUV_BUF_INT_H264_ERR      (1u << 7)   /* H264 error */
+#define YUV_BUF_INT_ENC_SLOW      (1u << 8)   /* encode slow */
+
+/* INT_STATUS register (0x0a) — same bit layout as INT_EN */
+
+#define YUV_BUF_INT_STATUS_MASK   0x1FFu      /* bits[8:0] */
+
+/* DVP interrupt IRQ number
+ * From ARMino int_types.h: INT_SRC_YUVB = 58 (for BK7258)
+ * NuttX IRQ = BK7258_IRQ_EXTINT + 58 = 16 + 58 = 74
+ */
+
+#define BK7258_IRQ_YUV_BUF        (BK7258_IRQ_EXTINT + 58)
+
+/* Module Clock Enable Register (sys_reserver_reg0xd)
+ * Address: SOC_SYS_REG_BASE + 0xd * 4 = 0x44010000 + 0x34
+ * Same register as CAMERA_CLK_EN_REG.
+ *
+ * bit[0]: h264_cken — H264 module clock (needed for YUV_BUF bus)
+ * bit[3]: yuv_cken  — YUV_BUF module clock
+ * bit[9]: cis_auxs_cken — CIS AUXS MCLK (already used for sensor)
+ *
+ * From ARMino sys_video_driver.c:yuv_buf_init_common()
+ *   sys_drv_set_h264_clk_en(1);   — bit[0]
+ *   sys_drv_set_yuv_buf_clk_en(1); — bit[3]
+ */
+
+#define CAMERA_H264_CLKEN_BIT     (1u << 0)
+#define CAMERA_YUV_BUF_CLKEN_BIT  (1u << 3)
+
+/* System Interrupt Enable Register (cpu1_int_32_63_en)
+ * Address: SOC_SYS_REG_BASE + 0x23 * 4 = 0x44010000 + 0x8C
+ *
+ * bit[26]: cpu0_yuvb_int_en — YUV_BUF interrupt enable to CPU0
+ *
+ * From ARMino sys_types.h:
+ *   YUV_BUF_INTERRUPT_CTRL_BIT = (1 << 26)
+ */
+
+#define CAMERA_SYS_INT_32_63_REG  (CAMERA_SYS_BASE + 0x8Cu)
+#define CAMERA_YUVB_INT_EN_BIT    (1u << 26)
+
+/* YUV_BUF Global Control Register (REG_0x02)
+ * Address: YUV_BUF_REG_BASE + 0x02 * 4
+ *
+ * bit[0]: soft_reset — 0=assert, 1=deassert
+ * bit[1]: clk_gate_bypass — 1=bypass clock gate
+ *
+ * From ARMino yuv_buf_ll.h:yuv_buf_ll_init()
+ *   hw->global_ctrl.soft_reset = 0;   // assert reset
+ *   hw->global_ctrl.soft_reset = 1;   // deassert reset
+ *   hw->global_ctrl.clk_gate_bypass = 1; // bypass clock gate
+ */
+
+#define YUV_BUF_REG_0x02          (YUV_BUF_REG_BASE + 0x02 * 4)
+#define YUV_BUF_GLOBAL_SOFT_RESET (1u << 0)
+#define YUV_BUF_GLOBAL_CLK_GATE   (1u << 1)
 
 #define CAMERA_GPIO_UNCONFIGURED  (-1)
 #define CAMERA_GPIO_MIN           0
@@ -123,11 +239,11 @@
 #define DVP_PIN_LAST    39
 #define DVP_PIN_COUNT   (DVP_PIN_LAST - DVP_PIN_FIRST + 1)
 
-/* Frame buffer parameters — RGB565 640x480 */
+/* Frame buffer parameters — YUYV 640x480 */
 
 #define CAMERA_HRES       640
 #define CAMERA_VRES       480
-#define CAMERA_BPP        2   /* RGB565 = 2 bytes per pixel */
+#define CAMERA_BPP        2   /* YUYV = 2 bytes per pixel */
 #define CAMERA_FRAME_SIZE (CAMERA_HRES * CAMERA_VRES * CAMERA_BPP)
 #define CAMERA_PSRAM_BASE 0x60000000u
 #define CAMERA_BUF_COUNT  2
@@ -175,11 +291,60 @@ static bool g_dvp_pins_configed = false;
 static volatile uint8_t *g_camera_buf[CAMERA_BUF_COUNT] = { NULL, NULL };
 static bool g_framebuf_allocated = false;
 
+/* Streaming state — ping-pong double buffering */
+
+#define PREVIEW_W       160
+#define PREVIEW_H       160
+#define PREVIEW_SIZE    (PREVIEW_W * PREVIEW_H * 2)  /* 51200 bytes */
+#define PREVIEW_ADDR    (CAMERA_PSRAM_BASE + 0x12C000u)  /* 0x6012C000 */
+
+#define STREAM_BUF_MAX  1000
+
+static volatile bool     g_stream_active   = false;
+static volatile uint32_t g_pingpong_count  = 0;
+static volatile uint32_t g_drop_count      = 0;
+static volatile int      g_cur_buf         = 0;
+static volatile int      g_ready_buf       = -1;
+static volatile int      g_busy_buf        = -1;
+
+/* LCD functions from bk7258_gc9d01.c (declared in board header) */
+
+extern int  bk7258_lcd_preview_init(void);
+extern void bk7258_lcd_preview_deinit(void);
+extern void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
+                                    uint16_t w, uint16_t h,
+                                    const uint8_t *rgb565);
+
+/* DVP controller state — saved before dvp_ctrl_config(), restored by
+ * dvp_ctrl_deconfig().  Only field-level RMW on shared registers.
+ */
+
+typedef struct
+{
+  uint32_t ctrl;        /* full CTRL register value (0x04) */
+  uint32_t pixel;       /* full PIXEL register value (0x05) */
+  uint32_t em_base;     /* EM_BASE_ADDR register value (0x08) */
+  uint32_t int_en;      /* INT_EN register value (0x09) */
+  uint32_t int_status;  /* INT_STATUS register value (0x0a) — write to clear */
+  bool     valid;
+} dvp_ctrl_state_t;
+
+static dvp_ctrl_state_t g_dvp_ctrl_saved = { .valid = false };
+static bool g_dvp_ctrl_configed = false;
+static bool g_dvp_irq_attached = false;
+
+/* DVP interrupt counters — incremented in ISR context */
+
+static volatile uint32_t g_dvp_vsync_count = 0;
+static volatile uint32_t g_dvp_hsync_count = 0;  /* not used yet, reserved */
+static volatile uint32_t g_dvp_frame_count = 0;
+
 /****************************************************************************
- * GC2145 Init Table (RGB565 640x480)
+ * GC2145 Init Table (YUYV 640x480)
  *
  * Ported from ARMino dvp_gc2145.c (Apache-2.0, Galois Inc).
- * Output format: register 0x84 = 0x06 (RGB565).
+ * Output format: register 0x84 = 0x02.
+ * Actual PSRAM byte order: UYVY (verified by camera dump).
  * Frame rate section (#if 0) excluded; drive strength included.
  ****************************************************************************/
 
@@ -232,7 +397,7 @@ static const uint8_t gc2145_init[][2] =
   {0x81, 0x26},
   {0x82, 0xfa},
   {0x83, 0x00},
-  {0x84, 0x06},  /* RGB565 (was 0x02=YUYV in ARMino) */
+  {0x84, 0x02},  /* output format (PSRAM byte order = UYVY) */
   {0x86, 0x03},
   {0x88, 0x03},
   {0x89, 0x03},
@@ -1443,7 +1608,7 @@ static int gc2145_write_table(const uint8_t (*table)[2], int count)
  * PSRAM Frame Buffer
  *
  * Allocate two ping-pong frame buffers in PSRAM at 0x60000000.
- * Each buffer is 640 * 480 * 2 = 614400 bytes (RGB565).
+ * Each buffer is 640 * 480 * 2 = 614400 bytes (YUYV).
  ****************************************************************************/
 
 static int camera_framebuf_alloc(void)
@@ -1480,6 +1645,551 @@ static void camera_framebuf_free(void)
   g_camera_buf[0] = NULL;
   g_camera_buf[1] = NULL;
   g_framebuf_allocated = false;
+}
+
+/****************************************************************************
+ * DVP Module Clock and Interrupt Enable
+ *
+ * From ARMino yuv_buf_driver.c:yuv_buf_init_common():
+ *   1. Enable YUV_BUF power (PM voting — skipped, assume always on)
+ *   2. Enable H264 clock (bit[0] of CLK_EN_REG) — needed for bus
+ *   3. Enable YUV_BUF clock (bit[3] of CLK_EN_REG)
+ *   4. Enable system interrupt (bit[26] of INT_32_63_EN_REG)
+ *   5. Init global control (soft reset + clock gate bypass)
+ *
+ * All register writes use field-level RMW on shared registers.
+ ****************************************************************************/
+
+typedef struct
+{
+  uint32_t clk_en;       /* CLK_EN_REG bits we modify */
+  uint32_t int_en;       /* INT_32_63_EN_REG bits we modify */
+  uint32_t global_ctrl;  /* YUV_BUF REG_0x02 value */
+  bool     valid;
+} dvp_module_state_t;
+
+static dvp_module_state_t g_dvp_module_saved = { .valid = false };
+static bool g_dvp_module_enabled = false;
+
+static int dvp_module_clk_enable(void)
+{
+  uint32_t val;
+
+  if (g_dvp_module_enabled)
+    {
+      return 0;
+    }
+
+  /* Save register values for restore — only bits we modify */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  g_dvp_module_saved.clk_en = val & (CAMERA_H264_CLKEN_BIT |
+                                      CAMERA_YUV_BUF_CLKEN_BIT);
+
+  val = getreg32(CAMERA_SYS_INT_32_63_REG);
+  g_dvp_module_saved.int_en = val & CAMERA_YUVB_INT_EN_BIT;
+
+  g_dvp_module_saved.global_ctrl = getreg32(YUV_BUF_REG_0x02);
+  g_dvp_module_saved.valid = true;
+
+  /* Step 1: Enable H264 clock — needed for YUV_BUF internal bus
+   * From ARMino sys_drv_set_h264_clk_en(1)
+   */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  val |= CAMERA_H264_CLKEN_BIT;
+  putreg32(val, CAMERA_CLK_EN_REG);
+
+  /* Step 2: Enable YUV_BUF clock
+   * From ARMino sys_drv_set_yuv_buf_clk_en(1)
+   */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  val |= CAMERA_YUV_BUF_CLKEN_BIT;
+  putreg32(val, CAMERA_CLK_EN_REG);
+
+  /* Step 3: Enable system interrupt for YUV_BUF
+   * From ARMino sys_drv_int_group2_enable(YUV_BUF_INTERRUPT_CTRL_BIT)
+   * YUV_BUF_INTERRUPT_CTRL_BIT = (1 << 26)
+   */
+
+  val = getreg32(CAMERA_SYS_INT_32_63_REG);
+  val |= CAMERA_YUVB_INT_EN_BIT;
+  putreg32(val, CAMERA_SYS_INT_32_63_REG);
+
+  /* Step 4: Init global control — soft reset + clock gate bypass
+   * From ARMino yuv_buf_ll_init():
+   *   hw->global_ctrl.soft_reset = 0;    // assert reset
+   *   hw->global_ctrl.soft_reset = 1;    // deassert reset
+   *   hw->global_ctrl.clk_gate_bypass = 1; // bypass clock gate
+   */
+
+  val = getreg32(YUV_BUF_REG_0x02);
+  val &= ~YUV_BUF_GLOBAL_SOFT_RESET;  /* assert reset */
+  putreg32(val, YUV_BUF_REG_0x02);
+
+  val |= YUV_BUF_GLOBAL_SOFT_RESET;   /* deassert reset */
+  val |= YUV_BUF_GLOBAL_CLK_GATE;     /* bypass clock gate */
+  putreg32(val, YUV_BUF_REG_0x02);
+
+  g_dvp_module_enabled = true;
+
+  syslog(LOG_INFO,
+         "[camera] DVP module clock enabled: CLK_EN=0x%08lX INT_EN=0x%08lX\n",
+         (unsigned long)getreg32(CAMERA_CLK_EN_REG),
+         (unsigned long)getreg32(CAMERA_SYS_INT_32_63_REG));
+
+  return 0;
+}
+
+static void dvp_module_clk_disable(void)
+{
+  uint32_t val;
+
+  if (!g_dvp_module_enabled) return;
+
+  /* Assert soft reset first */
+
+  val = getreg32(YUV_BUF_REG_0x02);
+  val &= ~YUV_BUF_GLOBAL_SOFT_RESET;
+  putreg32(val, YUV_BUF_REG_0x02);
+
+  /* Disable system interrupt for YUV_BUF */
+
+  val = getreg32(CAMERA_SYS_INT_32_63_REG);
+  val &= ~CAMERA_YUVB_INT_EN_BIT;
+  val |= g_dvp_module_saved.int_en;  /* restore saved bits */
+  putreg32(val, CAMERA_SYS_INT_32_63_REG);
+
+  /* Disable YUV_BUF clock */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  val &= ~CAMERA_YUV_BUF_CLKEN_BIT;
+  val |= (g_dvp_module_saved.clk_en & CAMERA_YUV_BUF_CLKEN_BIT);
+  putreg32(val, CAMERA_CLK_EN_REG);
+
+  /* Disable H264 clock */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  val &= ~CAMERA_H264_CLKEN_BIT;
+  val |= (g_dvp_module_saved.clk_en & CAMERA_H264_CLKEN_BIT);
+  putreg32(val, CAMERA_CLK_EN_REG);
+
+  /* Restore global control register */
+
+  putreg32(g_dvp_module_saved.global_ctrl, YUV_BUF_REG_0x02);
+
+  g_dvp_module_enabled = false;
+
+  syslog(LOG_INFO, "[camera] DVP module clock disabled\n");
+}
+
+/****************************************************************************
+ * DVP Controller Configuration (CIS / YUV_BUF)
+ *
+ * The YUV_BUF controller at 0x48020000 captures DVP data and writes it
+ * to external memory via its internal DMA.  Configuration steps:
+ *   1. Save all register values for restore
+ *   2. Set resolution (x_pixel = width/8, y_pixel = height/8)
+ *   3. Set format (YUV mode, YUYV)
+ *   4. Set polarity (HSYNC/VSYNC/PCLK from Kconfig)
+ *   5. Set frame buffer base address
+ *   6. Start YUV mode (set yuv_mode bit in CTRL)
+ *
+ * All register writes use field-level RMW on shared registers.
+ ****************************************************************************/
+
+static void dvp_ctrl_save_state(dvp_ctrl_state_t *s)
+{
+  s->ctrl       = getreg32(YUV_BUF_REG_0x04);
+  s->pixel      = getreg32(YUV_BUF_REG_0x05);
+  s->em_base    = getreg32(YUV_BUF_REG_0x08);
+  s->int_en     = getreg32(YUV_BUF_REG_0x09);
+  s->int_status = getreg32(YUV_BUF_REG_0x0a);
+  s->valid      = true;
+}
+
+static void dvp_ctrl_restore_state(const dvp_ctrl_state_t *s)
+{
+  if (!s->valid) return;
+
+  /* Disable interrupts first */
+
+  putreg32(0, YUV_BUF_REG_0x09);
+
+  /* Clear any pending interrupt status */
+
+  putreg32(YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
+
+  /* Restore registers in order: CTRL, PIXEL, EM_BASE, INT_EN */
+
+  putreg32(s->ctrl, YUV_BUF_REG_0x04);
+  putreg32(s->pixel, YUV_BUF_REG_0x05);
+  putreg32(s->em_base, YUV_BUF_REG_0x08);
+  putreg32(s->int_en, YUV_BUF_REG_0x09);
+}
+
+/****************************************************************************
+ * Name: dvp_ctrl_config
+ *
+ * Description:
+ *   Configure the CIS controller (YUV_BUF) for DVP capture.
+ *   Resolution: CAMERA_HRES x CAMERA_VRES (640x480).
+ *   Format: YUV mode, YUYV (matches GC2145 output).
+ *   Polarity: from Kconfig (CONFIG_DVP_PCLK_RISING, etc.).
+ *
+ *   The controller's internal DMA writes captured data to the address
+ *   in em_base_addr.
+ *
+ * Input Parameters:
+ *   em_base - External memory base address for frame buffer output
+ *
+ ****************************************************************************/
+
+static int dvp_ctrl_config(uint32_t em_base)
+{
+  int ret;
+  uint32_t val;
+  uint32_t x_pixel;
+  uint32_t y_pixel;
+  uint32_t frame_blk;
+
+  if (g_dvp_ctrl_configed)
+    {
+      syslog(LOG_WARNING, "[camera] DVP ctrl already configured\n");
+      return 0;
+    }
+
+  /* Enable module clock and system interrupt FIRST
+   * This must be done before accessing YUV_BUF registers.
+   */
+
+  ret = dvp_module_clk_enable();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] DVP module clock enable failed: %d\n", ret);
+      return ret;
+    }
+
+  /* Save all register values for restore */
+
+  dvp_ctrl_save_state(&g_dvp_ctrl_saved);
+
+  /* Calculate pixel parameters
+   * x_pixel = width / 8
+   * y_pixel = height / 8
+   * frame_blk = x_pixel * y_pixel / 2 (from ARMino yuv_buf_hal.c)
+   */
+
+  x_pixel   = CAMERA_HRES / 8;               /* 640/8 = 80 */
+  y_pixel   = CAMERA_VRES / 8;               /* 480/8 = 60 */
+  frame_blk = x_pixel * y_pixel / 2;         /* 80*60/2 = 2400 */
+
+  /* Configure CTRL register (0x04)
+   * Start from saved value to preserve reserved bits.
+   * Then set/clear fields as needed.
+   */
+
+  val = g_dvp_ctrl_saved.ctrl;
+
+  /* Enable YUV mode */
+
+  val |= YUV_BUF_CTRL_YUV_MODE;
+
+  /* Set YUV format to YUYV (controller default).
+   * NOTE: actual byte order in PSRAM is UYVY (verified by camera dump).
+   * The controller format field does NOT reorder bytes — it matches
+   * whatever the sensor outputs.  Software conversion uses UYVY parsing.
+   */
+
+  val &= ~YUV_BUF_CTRL_FMT_SEL_MASK;
+  val |= YUV_BUF_CTRL_FMT_YUYV;
+
+  /* Set PCLK edge — default is rising edge sampling.
+   * If CONFIG_DVP_PCLK_FALLING is set, invert to sample on falling edge.
+   */
+
+#ifdef CONFIG_DVP_PCLK_FALLING
+  val |= YUV_BUF_CTRL_VCK_EDGE;   /* sample on falling edge */
+#else
+  val &= ~YUV_BUF_CTRL_VCK_EDGE;  /* sample on rising edge (default) */
+#endif
+
+  /* Set HSYNC polarity — default is active-high (not inverted).
+   * If CONFIG_DVP_HSYNC_ACTIVE_LOW is set, invert HSYNC.
+   */
+
+#ifdef CONFIG_DVP_HSYNC_ACTIVE_LOW
+  val |= YUV_BUF_CTRL_HSYNC_REV;
+#else
+  val &= ~YUV_BUF_CTRL_HSYNC_REV;
+#endif
+
+  /* Set VSYNC polarity — default is active-high (not inverted).
+   * If CONFIG_DVP_VSYNC_ACTIVE_LOW is set, invert VSYNC.
+   */
+
+#ifdef CONFIG_DVP_VSYNC_ACTIVE_LOW
+  val |= YUV_BUF_CTRL_VSYNC_REV;
+#else
+  val &= ~YUV_BUF_CTRL_VSYNC_REV;
+#endif
+
+  /* Disable H264 mode — we're doing raw YUV capture */
+
+  val &= ~YUV_BUF_CTRL_H264_MODE;
+
+  /* Disable memrev and byte_rev — ARMino disables these for normal
+   * YUV capture mode.  Only enable in nosensor_encode mode.
+   */
+
+  val &= ~YUV_BUF_CTRL_MEMREV;
+  val &= ~YUV_BUF_CTRL_BYTE_REV;
+
+  /* Write CTRL register */
+
+  putreg32(val, YUV_BUF_REG_0x04);
+
+  /* Configure PIXEL register (0x05)
+   * bit[7:0]   = x_pixel (width/8)
+   * bit[15:8]  = y_pixel (height/8)
+   * bit[31:16] = frame_blk (total blocks)
+   */
+
+  val = (x_pixel & YUV_BUF_PIXEL_X_MASK) |
+        ((y_pixel << YUV_BUF_PIXEL_Y_POS) & YUV_BUF_PIXEL_Y_MASK) |
+        ((frame_blk << YUV_BUF_PIXEL_BLK_POS) & YUV_BUF_PIXEL_BLK_MASK);
+
+  putreg32(val, YUV_BUF_REG_0x05);
+
+  /* Set external memory base address (0x08) */
+
+  putreg32(em_base, YUV_BUF_REG_0x08);
+
+  /* Clear any pending interrupt status */
+
+  putreg32(YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
+
+  /* Start YUV mode — set bit[0] of CTRL (yuv_mode)
+   * From ARMino bk_yuv_buf_start(YUV_MODE) -> yuv_buf_hal_start_yuv_mode()
+   *   yuv_buf_ll_enable_yuv_buf_mode(hal->hw);  // bit[0] = 1
+   *   yuv_buf_ll_disable_h264_encode_mode(hal->hw); // bit[3] = 0
+   */
+
+  val = getreg32(YUV_BUF_REG_0x04);
+  val |= YUV_BUF_CTRL_YUV_MODE;     /* enable YUV buf mode */
+  val &= ~YUV_BUF_CTRL_H264_MODE;   /* disable H264 mode */
+  putreg32(val, YUV_BUF_REG_0x04);
+
+  g_dvp_ctrl_configed = true;
+
+  syslog(LOG_INFO,
+         "[camera] DVP ctrl config: %dx%d xpix=%lu ypix=%lu blk=%lu "
+         "em_base=0x%08lX\n",
+         CAMERA_HRES, CAMERA_VRES,
+         (unsigned long)x_pixel, (unsigned long)y_pixel,
+         (unsigned long)frame_blk,
+         (unsigned long)em_base);
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: dvp_ctrl_deconfig
+ *
+ * Description:
+ *   Restore all CIS controller registers to their saved values.
+ *   Disables interrupts and clears pending status before restore.
+ *
+ ****************************************************************************/
+
+static void dvp_ctrl_deconfig(void)
+{
+  if (!g_dvp_ctrl_configed) return;
+
+  dvp_ctrl_restore_state(&g_dvp_ctrl_saved);
+  g_dvp_ctrl_configed = false;
+
+  /* Disable module clock after restoring registers */
+
+  dvp_module_clk_disable();
+}
+
+/****************************************************************************
+ * Frame Consumer API (critical-section protected)
+ ****************************************************************************/
+
+static uint32_t dvp_frame_get(void)
+{
+  irqstate_t flags;
+  int idx;
+  uint32_t addr;
+
+  flags = enter_critical_section();
+  idx = g_ready_buf;
+  if (idx >= 0)
+    {
+      g_busy_buf  = idx;
+      g_ready_buf = -1;
+      addr = (uint32_t)(uintptr_t)g_camera_buf[idx];
+    }
+  else
+    {
+      addr = 0;
+    }
+
+  leave_critical_section(flags);
+  return addr;
+}
+
+static void dvp_frame_put(void)
+{
+  irqstate_t flags;
+
+  flags = enter_critical_section();
+  g_busy_buf = -1;
+  leave_critical_section(flags);
+}
+
+/****************************************************************************
+ * Name: dvp_irq_handler
+ *
+ * Description:
+ *   ISR for DVP (YUV_BUF) controller interrupts.
+ *   Handles VSYNC falling edge (frame start) and YUV arrived (frame done).
+ *
+ ****************************************************************************/
+
+static int dvp_irq_handler(int irq, void *context, void *arg)
+{
+  uint32_t status;
+
+  /* Read interrupt status */
+
+  status = getreg32(YUV_BUF_REG_0x0a);
+
+  /* VSYNC falling edge — frame start */
+
+  if (status & YUV_BUF_INT_VSYNC_NEGE)
+    {
+      g_dvp_vsync_count++;
+    }
+
+  /* YUV arrived — frame data written to memory */
+
+  if (status & YUV_BUF_INT_YUV_ARV)
+    {
+      g_dvp_frame_count++;
+
+      /* Ping-pong: if streaming, advance to next buffer */
+
+      if (g_stream_active)
+        {
+          int next_buf = 1 - g_cur_buf;
+
+          if (g_ready_buf < 0 && next_buf != g_busy_buf)
+            {
+              g_ready_buf = g_cur_buf;
+              g_cur_buf = next_buf;
+              g_pingpong_count++;
+              putreg32((uint32_t)(uintptr_t)g_camera_buf[g_cur_buf],
+                       YUV_BUF_REG_0x08);
+            }
+          else
+            {
+              g_drop_count++;
+            }
+        }
+    }
+
+  /* Clear all pending interrupts by writing 1s */
+
+  putreg32(status & YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: dvp_irq_attach
+ *
+ * Description:
+ *   Attach DVP interrupt handler and enable VSYNC + YUV_ARRIVED interrupts.
+ *
+ ****************************************************************************/
+
+static int dvp_irq_attach(void)
+{
+  int ret;
+
+  if (g_dvp_irq_attached)
+    {
+      syslog(LOG_WARNING, "[camera] DVP IRQ already attached\n");
+      return 0;
+    }
+
+  /* Reset counters */
+
+  g_dvp_vsync_count = 0;
+  g_dvp_hsync_count = 0;
+  g_dvp_frame_count = 0;
+
+  /* Attach ISR */
+
+  ret = irq_attach(BK7258_IRQ_YUV_BUF, dvp_irq_handler, NULL);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] irq_attach failed: %d\n", ret);
+      return ret;
+    }
+
+  /* Enable VSYNC falling edge and YUV arrived interrupts */
+
+  putreg32(YUV_BUF_INT_VSYNC_NEGE | YUV_BUF_INT_YUV_ARV,
+           YUV_BUF_REG_0x09);
+
+  /* Enable the IRQ in NVIC */
+
+  up_enable_irq(BK7258_IRQ_YUV_BUF);
+
+  g_dvp_irq_attached = true;
+
+  syslog(LOG_INFO, "[camera] DVP IRQ attached (IRQ %d)\n",
+         BK7258_IRQ_YUV_BUF);
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: dvp_irq_detach
+ *
+ * Description:
+ *   Disable DVP interrupts and detach the ISR.
+ *
+ ****************************************************************************/
+
+static void dvp_irq_detach(void)
+{
+  if (!g_dvp_irq_attached) return;
+
+  /* Disable IRQ in NVIC */
+
+  up_disable_irq(BK7258_IRQ_YUV_BUF);
+
+  /* Disable all DVP interrupts */
+
+  putreg32(0, YUV_BUF_REG_0x09);
+
+  /* Clear any pending status */
+
+  putreg32(YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
+
+  /* Detach ISR — restore default handler */
+
+  irq_detach(BK7258_IRQ_YUV_BUF);
+
+  g_dvp_irq_attached = false;
+
+  syslog(LOG_INFO, "[camera] DVP IRQ detached\n");
 }
 
 /****************************************************************************
@@ -1638,6 +2348,7 @@ static int camera_check_config(void)
       { 24, "LCD right RST"  },
       { 25, "LCD backlight"  },
       { 45, "LCD left RST"   },
+      { 52, "LCD LDO_3V3_EN" },
     };
 
     static const int cpins[] = {
@@ -1653,7 +2364,7 @@ static int camera_check_config(void)
     for (i = 0; i < 6; i++)
       {
         if (cpins[i] == CAMERA_GPIO_UNCONFIGURED) continue;
-        for (r = 0; r < 15; r++)
+        for (r = 0; r < (int)(sizeof(rsv) / sizeof(rsv[0])); r++)
           {
             if (cpins[i] == rsv[r].pin)
               {
@@ -1863,7 +2574,7 @@ cleanup:
 /****************************************************************************
  * Name: bk7258_camera_init
  *   Phase 1 Step 2: power on, MCLK, reset, read ID, write GC2145 init
- *   table (RGB565 640x480), readback verify, keep MCLK/power on for
+ *   table (YUYV 640x480), readback verify, keep MCLK/power on for
  *   oscilloscope verification.
  ****************************************************************************/
 
@@ -1972,10 +2683,10 @@ int bk7258_camera_init(void)
         ret = val84;
         goto cleanup;
       }
-    if (val84 != 0x06)
+    if (val84 != 0x02)
       {
         syslog(LOG_ERR,
-               "[camera] Reg 0x84 mismatch: 0x%02X (expected 0x06=RGB565)\n",
+               "[camera] Reg 0x84 mismatch: 0x%02X (expected 0x02=YUYV)\n",
                val84);
         ret = -EIO;
         goto cleanup;
@@ -2001,7 +2712,7 @@ int bk7258_camera_init(void)
   }
 
   syslog(LOG_INFO,
-         "[camera] GC2145 init complete — RGB565 640x480\n");
+         "[camera] GC2145 init complete — YUYV 640x480\n");
   syslog(LOG_INFO,
          "[camera] MCLK/power left ON for oscilloscope verification\n");
 
@@ -2035,6 +2746,20 @@ cleanup:
 int bk7258_camera_stop(void)
 {
   uint32_t val;
+
+  /* Detach DVP IRQ first — stop interrupts before modifying registers */
+
+  dvp_irq_detach();
+
+  /* Restore DVP controller registers and disable module clock */
+
+  dvp_ctrl_deconfig();
+
+  /* Also disable module clock in case dvp_ctrl_config was never called
+   * but dvp_module_clk_enable was called directly.
+   */
+
+  dvp_module_clk_disable();
 
   /* Turn off MCLK gate */
 
@@ -2126,4 +2851,1005 @@ int bk7258_camera_buf(void)
 bool bk7258_camera_dvp_active(void)
 {
   return g_dvp_pins_configed;
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_sync
+ *
+ * Description:
+ *   Phase 1 Round 2 Step 4a: DVP controller config + interrupt counting.
+ *
+ *   Configures the CIS controller (YUV_BUF) for 640x480 YUV capture,
+ *   attaches VSYNC/YUV_ARRIVED interrupt handlers, and waits for a
+ *   configurable number of VSYNC edges (default 10) to verify the
+ *   camera is producing valid sync signals.
+ *
+ *   Prerequisites: camera init must have been run (MCLK on, GC2145
+ *   configured for output).  Frame buffers must be allocated.
+ *
+ *   On exit: interrupts are detached, controller registers restored.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_sync(void)
+{
+  int ret;
+  int timeout_ms;
+  uint32_t vsync_target;
+  uint32_t vsync_prev;
+  uint32_t vsync_now;
+
+  /* Check DVP pins are configured (camera init must have been run) */
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR,
+             "[camera] DVP pins not configured — run 'camera init' first\n");
+      return -ENODEV;
+    }
+
+  /* Check frame buffers allocated */
+
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR,
+             "[camera] Frame buffers not allocated — run 'camera buf' first\n");
+      return -ENOMEM;
+    }
+
+  /* Configure DVP controller — use buf[0] as output target.
+   * The controller needs a valid em_base_addr even for sync-only test.
+   */
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] DVP ctrl config failed: %d\n", ret);
+      goto cleanup_ctrl;
+    }
+
+  /* Attach interrupt handler and enable interrupts */
+
+  ret = dvp_irq_attach();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] DVP IRQ attach failed: %d\n", ret);
+      goto cleanup_irq;
+    }
+
+  /* Wait for VSYNC edges — timeout 5 seconds */
+
+  vsync_target = 10;
+  timeout_ms   = 5000;
+  vsync_prev   = g_dvp_vsync_count;
+
+  syslog(LOG_INFO,
+         "[camera] Waiting for %lu VSYNC edges (timeout %d ms)...\n",
+         (unsigned long)vsync_target, timeout_ms);
+
+  while (timeout_ms > 0)
+    {
+      vsync_now = g_dvp_vsync_count;
+      if (vsync_now >= vsync_target)
+        {
+          break;
+        }
+
+      /* Print progress every 100 VSYNC edges */
+
+      if (vsync_now != vsync_prev && (vsync_now % 100) == 0)
+        {
+          syslog(LOG_INFO, "[camera] VSYNC count: %lu\n",
+                 (unsigned long)vsync_now);
+          vsync_prev = vsync_now;
+        }
+
+      up_udelay(1000);  /* 1 ms */
+      timeout_ms--;
+    }
+
+  /* Report results */
+
+  vsync_now = g_dvp_vsync_count;
+
+  syslog(LOG_INFO,
+         "[camera] Sync result: VSYNC=%lu YUV_ARRIVED=%lu (target=%lu)\n",
+         (unsigned long)vsync_now,
+         (unsigned long)g_dvp_frame_count,
+         (unsigned long)vsync_target);
+
+  if (vsync_now < vsync_target)
+    {
+      syslog(LOG_ERR,
+             "[camera] TIMEOUT: only %lu VSYNC edges in 5s "
+             "(expected %lu)\n",
+             (unsigned long)vsync_now, (unsigned long)vsync_target);
+      syslog(LOG_ERR,
+             "[camera] Check: MCLK on P27, sensor powered, "
+             "DVP pins P29-P39\n");
+      ret = -ETIMEDOUT;
+    }
+  else
+    {
+      syslog(LOG_INFO, "[camera] DVP sync OK — %lu VSYNC edges captured\n",
+             (unsigned long)vsync_now);
+      ret = 0;
+    }
+
+cleanup_irq:
+  /* Always detach IRQ in sync test — we don't keep it running */
+
+  dvp_irq_detach();
+
+cleanup_ctrl:
+  /* Always restore controller registers */
+
+  dvp_ctrl_deconfig();
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_grab
+ *
+ * Description:
+ *   Phase 1 Round 2 Step 4b: DMA single frame capture to PSRAM.
+ *
+ *   Configures the CIS controller, attaches interrupts, fills the
+ *   target buffer with 0x5A pattern, waits for one complete frame
+ *   (YUV_ARRIVED interrupt), then hexdumps the first 256 bytes.
+ *
+ *   Prerequisites: camera init + camera buf must have been run.
+ *
+ *   On exit: interrupts are detached, controller registers restored.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_grab(void)
+{
+  int ret;
+  int timeout_ms;
+  uint32_t frame_start;
+  volatile uint8_t *buf;
+  int i;
+
+  /* Check DVP pins are configured */
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR,
+             "[camera] DVP pins not configured — run 'camera init' first\n");
+      return -ENODEV;
+    }
+
+  /* Check frame buffers allocated */
+
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR,
+             "[camera] Frame buffers not allocated — run 'camera buf' first\n");
+      return -ENOMEM;
+    }
+
+  /* Fill target buffer with 0x5A pattern — allows detection of
+   * whether DMA actually wrote data.
+   */
+
+  buf = g_camera_buf[0];
+  syslog(LOG_INFO, "[camera] Filling buf[0] with 0x5A pattern (%d bytes)\n",
+         CAMERA_FRAME_SIZE);
+
+  for (i = 0; i < CAMERA_FRAME_SIZE; i++)
+    {
+      buf[i] = 0x5A;
+    }
+
+  /* Configure DVP controller — output to buf[0] */
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] DVP ctrl config failed: %d\n", ret);
+      goto cleanup_ctrl;
+    }
+
+  /* Attach interrupt handler */
+
+  ret = dvp_irq_attach();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] DVP IRQ attach failed: %d\n", ret);
+      goto cleanup_irq;
+    }
+
+  /* Wait for one complete frame — YUV_ARRIVED interrupt.
+   * Timeout 5 seconds.
+   */
+
+  frame_start = g_dvp_frame_count;
+  timeout_ms  = 5000;
+
+  syslog(LOG_INFO, "[camera] Waiting for frame (timeout %d ms)...\n",
+         timeout_ms);
+
+  while (timeout_ms > 0)
+    {
+      if (g_dvp_frame_count > frame_start)
+        {
+          break;
+        }
+
+      up_udelay(1000);  /* 1 ms */
+      timeout_ms--;
+    }
+
+  if (g_dvp_frame_count <= frame_start)
+    {
+      syslog(LOG_ERR,
+             "[camera] TIMEOUT: no frame received in 5s "
+             "(VSYNC=%lu FRAME=%lu)\n",
+             (unsigned long)g_dvp_vsync_count,
+             (unsigned long)g_dvp_frame_count);
+      ret = -ETIMEDOUT;
+      goto cleanup_irq;
+    }
+
+  syslog(LOG_INFO, "[camera] Frame captured — VSYNC=%lu FRAME=%lu\n",
+         (unsigned long)g_dvp_vsync_count,
+         (unsigned long)g_dvp_frame_count);
+
+  /* Hexdump first 256 bytes of captured frame.
+   * Byte order: UYVY (U=b0 Y0=b1 V=b2 Y1=b3, verified by camera dump).
+   * In neutral scenes: even bytes (U/V) ≈ 0x80, odd bytes (Y) vary.
+   */
+
+  syslog(LOG_INFO, "[camera] First 256 bytes of captured frame (UYVY):\n");
+
+  for (i = 0; i < 256; i += 16)
+    {
+      syslog(LOG_INFO,
+             "  %04X: %02X %02X %02X %02X %02X %02X %02X %02X "
+             "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+             i,
+             buf[i + 0],  buf[i + 1],  buf[i + 2],  buf[i + 3],
+             buf[i + 4],  buf[i + 5],  buf[i + 6],  buf[i + 7],
+             buf[i + 8],  buf[i + 9],  buf[i + 10], buf[i + 11],
+             buf[i + 12], buf[i + 13], buf[i + 14], buf[i + 15]);
+    }
+
+  /* Check if buffer still contains 0x5A pattern — if so, DMA didn't write */
+
+  {
+    bool all_5a = true;
+    for (i = 0; i < 256; i++)
+      {
+        if (buf[i] != 0x5A)
+          {
+            all_5a = false;
+            break;
+          }
+      }
+
+    if (all_5a)
+      {
+        syslog(LOG_ERR,
+               "[camera] WARNING: buf[0] still 0x5A — DMA may not have "
+               "written data\n");
+        ret = -EIO;
+      }
+    else
+      {
+        syslog(LOG_INFO,
+               "[camera] DMA write verified — buf[0] contains non-0x5A data\n");
+        ret = 0;
+      }
+  }
+
+cleanup_irq:
+  dvp_irq_detach();
+
+cleanup_ctrl:
+  dvp_ctrl_deconfig();
+
+  return ret;
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_stream
+ *
+ * Description:
+ *   Phase 1 Round 3 Step 5: continuous capture with ping-pong buffering.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_stream(int n_frames)
+{
+  int ret;
+  uint32_t elapsed_ms;
+  int captured;
+  int timeout_ms;
+  int i;
+
+  if (n_frames <= 0) n_frames = 30;
+  else if (n_frames > STREAM_BUF_MAX) n_frames = STREAM_BUF_MAX;
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR, "[camera] DVP pins not configured\n");
+      return -ENODEV;
+    }
+
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR, "[camera] Frame buffers not allocated\n");
+      return -ENOMEM;
+    }
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0) goto cleanup_ctrl;
+
+  ret = dvp_irq_attach();
+  if (ret < 0) goto cleanup_irq;
+
+  g_dvp_vsync_count = 0;
+  g_dvp_frame_count = 0;
+  g_pingpong_count  = 0;
+  g_drop_count      = 0;
+  g_cur_buf         = 0;
+  g_ready_buf       = -1;
+  g_busy_buf        = -1;
+  g_stream_active   = true;
+
+  syslog(LOG_INFO,
+         "[camera] Stream start: capturing %d frames "
+         "(buf[0]=0x%08lX buf[1]=0x%08lX)\n",
+         n_frames,
+         (unsigned long)(uintptr_t)g_camera_buf[0],
+         (unsigned long)(uintptr_t)g_camera_buf[1]);
+
+  captured = 0;
+
+  while (captured < n_frames)
+    {
+      uint32_t frame_addr;
+
+      timeout_ms = 5000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr != 0) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR, "[camera] TIMEOUT waiting for frame %d/%d\n",
+                 captured + 1, n_frames);
+          ret = -ETIMEDOUT;
+          break;
+        }
+
+      captured++;
+
+      {
+        const uint8_t *buf = (const uint8_t *)(uintptr_t)frame_addr;
+        uint32_t y_sum = 0;
+        int samples = 0;
+
+        for (i = 0; i < CAMERA_FRAME_SIZE; i += 16 * CAMERA_HRES)
+          {
+            int j;
+            for (j = 0; j < CAMERA_HRES; j += 16)
+              {
+                y_sum += buf[i + j];
+                samples++;
+              }
+          }
+
+        if (captured == 1 || captured == n_frames || (captured % 10) == 0)
+          {
+            syslog(LOG_INFO,
+                   "[camera] %d/%d  VSYNC=%lu  FRAME=%lu  "
+                   "Y_avg=%lu  drop=%lu\n",
+                   captured, n_frames,
+                   (unsigned long)g_dvp_vsync_count,
+                   (unsigned long)g_dvp_frame_count,
+                   (unsigned long)(samples > 0 ? y_sum / samples : 0),
+                   (unsigned long)g_drop_count);
+          }
+      }
+
+      dvp_frame_put();
+    }
+
+  g_stream_active = false;
+
+  elapsed_ms = g_dvp_frame_count > 0 ? (uint32_t)g_dvp_frame_count * 33 : 0;
+
+  syslog(LOG_INFO,
+         "[camera] Stream done: captured=%d  total=%lu  drop=%lu  vsync=%lu\n",
+         captured,
+         (unsigned long)g_pingpong_count,
+         (unsigned long)g_drop_count,
+         (unsigned long)g_dvp_vsync_count);
+
+  if (elapsed_ms > 0)
+    {
+      syslog(LOG_INFO, "[camera] Elapsed: ~%lu ms  Avg FPS: ~%lu\n",
+             (unsigned long)elapsed_ms,
+             (unsigned long)(captured * 1000 / (elapsed_ms > 0 ? elapsed_ms : 1)));
+    }
+
+  ret = captured > 0 ? 0 : -EIO;
+
+cleanup_irq:
+  dvp_irq_detach();
+cleanup_ctrl:
+  dvp_ctrl_deconfig();
+  return ret;
+}
+
+/****************************************************************************
+ * UYVY → RGB565 scaled conversion
+ *
+ * GC2145 (reg 0x84 = 0x02) + BK7258 YUV_BUF (CTRL FMT=00) combination
+ * produces UYVY byte order in PSRAM, verified by camera dump:
+ *   byte0=U (~0x80 neutral), byte1=Y (luminance), byte2=V, byte3=Y
+ *
+ * UYVY 4-byte layout per 2 pixels:
+ *   [U  Y0  V  Y1]
+ *    b0  b1  b2  b3
+ *
+ * Source byte offset for pixel sx = sx * 2.
+ *   even sx: Y=b0, U=b1, V=b3  (from p = row + sx*2)
+ *   odd  sx: Y=b2, U=b1, V=b3  (from p = row + sx*2, same pair)
+ * Simplified: always p = row + (sx & ~1)*2, then:
+ *   Y = p[1 + (sx&1)*2],  U = p[0],  V = p[2]
+ ****************************************************************************/
+
+static void uyvy_to_rgb565_scaled(const uint8_t *src,
+                                  uint8_t *dst,
+                                  int src_w, int src_h,
+                                  int dst_w, int dst_h)
+{
+  int sx, sy, dx, dy;
+  uint8_t *out = dst;
+  int scale_x = src_w / dst_w;
+  int scale_y = src_h / dst_h;
+
+  for (dy = 0; dy < dst_h; dy++)
+    {
+      sy = dy * scale_y;
+      const uint8_t *row = src + sy * src_w * 2;
+
+      for (dx = 0; dx < dst_w; dx++)
+        {
+          uint8_t y0;
+          int cb_i, cr_i, r, g, b;
+          uint16_t rgb;
+          int pos;
+
+          sx = dx * scale_x;
+
+          /* UYVY: pair pointer = start of 4-byte group */
+
+          const uint8_t *p = row + (sx & ~1) * 2;
+
+          y0   = p[1 + (sx & 1) * 2];     /* Y0=p[1], Y1=p[3] */
+          cb_i = (int)p[0] - 128;          /* U  = byte0 */
+          cr_i = (int)p[2] - 128;          /* V  = byte2 */
+
+          r = (int)y0 + cr_i + (cr_i * 51 / 128);
+          g = (int)y0 - (cb_i * 28 / 81) - (cr_i * 365 / 512);
+          b = (int)y0 + cb_i + (cb_i * 99 / 128);
+
+          if (r < 0) r = 0;
+          if (r > 255) r = 255;
+          if (g < 0) g = 0;
+          if (g > 255) g = 255;
+          if (b < 0) b = 0;
+          if (b > 255) b = 255;
+
+          /* Store as big-endian RGB565 (hi byte first) to match
+           * lcd_fill_rect byte order which drives this LCD correctly.
+           */
+
+          rgb = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+          pos = (dy * dst_w + dx) * 2;
+          out[pos]     = (uint8_t)(rgb >> 8);    /* hi = R[4:0] G[5:3] */
+          out[pos + 1] = (uint8_t)(rgb & 0xff);  /* lo = G[2:0] B[4:0] */
+        }
+    }
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_preview
+ *
+ * Description:
+ *   Phase 1 Round 3 Step 6: capture + LCD preview.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_preview(int n_frames)
+{
+  int ret;
+  int captured;
+  int timeout_ms;
+  int i;
+  uint32_t t_start;
+  uint32_t t_end;
+  uint32_t now;
+  uint32_t cap_ms;
+  uint32_t disp_ms;
+  volatile uint8_t *preview_buf;
+
+  preview_buf = (volatile uint8_t *)PREVIEW_ADDR;
+
+  if (n_frames <= 0) n_frames = 100;
+  else if (n_frames > STREAM_BUF_MAX) n_frames = STREAM_BUF_MAX;
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR, "[camera] DVP pins not configured\n");
+      return -ENODEV;
+    }
+
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR, "[camera] Frame buffers not allocated\n");
+      return -ENOMEM;
+    }
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0) goto cleanup_ctrl;
+
+  ret = dvp_irq_attach();
+  if (ret < 0) goto cleanup_irq;
+
+  g_dvp_vsync_count = 0;
+  g_dvp_frame_count = 0;
+  g_pingpong_count  = 0;
+  g_drop_count      = 0;
+  g_cur_buf         = 0;
+  g_ready_buf       = -1;
+  g_busy_buf        = -1;
+  g_stream_active   = true;
+
+  /* Initialize LCD (LDO_3V3 + backlight + SPI + GC9D01) */
+
+  ret = bk7258_lcd_preview_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] LCD preview init failed: %d\n", ret);
+      goto stop_stream;
+    }
+
+  syslog(LOG_INFO,
+         "[camera] Preview start: %d frames to LCD (160x160)\n",
+         n_frames);
+
+  /* Warm-up — discard first 30 frames (sensor AE/AWB convergence) */
+
+  for (i = 0; i < 30; i++)
+    {
+      uint32_t frame_addr;
+
+      timeout_ms = 1000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr != 0) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR, "[camera] TIMEOUT during warm-up frame %d\n", i);
+          ret = -ETIMEDOUT;
+          goto stop_stream;
+        }
+
+      dvp_frame_put();
+    }
+
+  captured = 0;
+  t_start = 0;
+  t_end   = 0;
+
+  while (captured < n_frames)
+    {
+      uint32_t frame_addr;
+
+      timeout_ms = 5000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr != 0) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR, "[camera] TIMEOUT waiting for preview frame %d/%d\n",
+                 captured + 1, n_frames);
+          ret = -ETIMEDOUT;
+          break;
+        }
+
+      now = g_dvp_frame_count * 33;
+      if (captured == 0) t_start = now;
+
+      uyvy_to_rgb565_scaled((const uint8_t *)(uintptr_t)frame_addr,
+                            (uint8_t *)preview_buf,
+                            CAMERA_HRES, CAMERA_VRES,
+                            PREVIEW_W, PREVIEW_H);
+
+      bk7258_lcd_blit_rgb565(0, 0, PREVIEW_W, PREVIEW_H,
+                              (const uint8_t *)preview_buf);
+
+      t_end = now;
+      captured++;
+
+      dvp_frame_put();
+
+      if (captured % 10 == 0 || captured == n_frames)
+        {
+          cap_ms  = t_end - t_start;
+          disp_ms = cap_ms > 0 ? cap_ms : 1;
+
+          syslog(LOG_INFO,
+                 "[camera] %d/%d  cap=%lu  drop=%lu  elapsed=%lums  fps=~%lu\n",
+                 captured, n_frames,
+                 (unsigned long)g_pingpong_count,
+                 (unsigned long)g_drop_count,
+                 (unsigned long)cap_ms,
+                 (unsigned long)(captured * 1000 / disp_ms));
+        }
+    }
+
+  ret = captured > 0 ? 0 : -EIO;
+
+stop_stream:
+  g_stream_active = false;
+
+  cap_ms = t_end > t_start ? (t_end - t_start) : 0;
+
+  syslog(LOG_INFO,
+         "[camera] Preview done: captured=%d  total=%lu  drop=%lu  vsync=%lu\n",
+         captured,
+         (unsigned long)g_pingpong_count,
+         (unsigned long)g_drop_count,
+         (unsigned long)g_dvp_vsync_count);
+
+  if (cap_ms > 0)
+    {
+      syslog(LOG_INFO,
+             "[camera] Capture: ~%lu ms  Capture FPS: ~%lu  Display FPS: ~%lu\n",
+             (unsigned long)cap_ms,
+             (unsigned long)(captured * 1000 / cap_ms),
+             (unsigned long)(captured * 1000 / cap_ms));
+    }
+
+  bk7258_lcd_preview_deinit();
+
+cleanup_irq:
+  dvp_irq_detach();
+cleanup_ctrl:
+  dvp_ctrl_deconfig();
+  return ret;
+}
+
+/****************************************************************************
+ * Name: yuv_to_rgb
+ *
+ * Description:
+ *   Shared YUV→RGB helper for dump diagnostics.
+ *   Input: Y, U, V as raw bytes (0-255).
+ *   Output: r, g, b clamped to 0-255.
+ *
+ ****************************************************************************/
+
+static void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v,
+                        int *r, int *g, int *b)
+{
+  int yi = (int)y;
+  int cb = (int)u - 128;
+  int cr = (int)v - 128;
+
+  *r = yi + cr + (cr * 51 / 128);
+  *g = yi - (cb * 28 / 81) - (cr * 365 / 512);
+  *b = yi + cb + (cb * 99 / 128);
+
+  if (*r < 0) *r = 0;  if (*r > 255) *r = 255;
+  if (*g < 0) *g = 0;  if (*g > 255) *g = 255;
+  if (*b < 0) *b = 0;  if (*b > 255) *b = 255;
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_dump
+ *
+ * Description:
+ *   Capture one frame, hexdump first 64 bytes, then interpret under
+ *   all 4 YUV byte-orderings and print RGB for each pixel.
+ *
+ *   Diagnostic key: in a neutral (grey/white) scene, U and V should
+ *   be near 0x80.  The format where U and V cluster around 0x80 is
+ *   the correct one.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_dump(void)
+{
+  int ret;
+  int timeout_ms;
+  uint32_t frame_start;
+  volatile uint8_t *buf;
+  int i;
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR, "[camera] DVP pins not configured\n");
+      return -ENODEV;
+    }
+
+  if (!g_framebuf_allocated)
+    {
+      ret = camera_framebuf_alloc();
+      if (ret < 0) return ret;
+    }
+
+  /* Fill with 0xCC to detect if DMA wrote */
+
+  buf = g_camera_buf[0];
+  for (i = 0; i < 256; i++)
+    ((volatile uint8_t *)buf)[i] = 0xCC;
+
+  /* Configure DVP and capture one frame */
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0) return ret;
+
+  ret = dvp_irq_attach();
+  if (ret < 0) { dvp_ctrl_deconfig(); return ret; }
+
+  frame_start = g_dvp_frame_count;
+  timeout_ms = 5000;
+
+  while (timeout_ms > 0)
+    {
+      if (g_dvp_frame_count > frame_start) break;
+      up_udelay(1000);
+      timeout_ms--;
+    }
+
+  dvp_irq_detach();
+  dvp_ctrl_deconfig();
+
+  if (g_dvp_frame_count <= frame_start)
+    {
+      syslog(LOG_ERR, "[camera] dump: TIMEOUT — no frame\n");
+      return -ETIMEDOUT;
+    }
+
+  /* Check if DMA wrote (not still 0xCC) */
+
+  if (buf[0] == 0xCC && buf[1] == 0xCC && buf[2] == 0xCC)
+    {
+      syslog(LOG_ERR,
+             "[camera] dump: buf still 0xCC — DMA did not write\n");
+      return -EIO;
+    }
+
+  /* Hexdump first 64 bytes */
+
+  syslog(LOG_INFO, "[camera] dump: first 64 bytes of captured frame:\n");
+  for (i = 0; i < 64; i += 16)
+    {
+      syslog(LOG_INFO,
+             "  %04X: %02X %02X %02X %02X %02X %02X %02X %02X "
+             "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+             i,
+             buf[i+0],  buf[i+1],  buf[i+2],  buf[i+3],
+             buf[i+4],  buf[i+5],  buf[i+6],  buf[i+7],
+             buf[i+8],  buf[i+9],  buf[i+10], buf[i+11],
+             buf[i+12], buf[i+13], buf[i+14], buf[i+15]);
+    }
+
+  /* Interpret first 8 pixels (16 bytes) under all 4 formats */
+
+  syslog(LOG_INFO, "[camera] dump: RGB under 4 YUV interpretations:\n");
+
+  /* Format definitions:
+   *   YUYV: [Y0  U  Y1  V ] [Y2  U  Y3  V ] ...
+   *   UYVY: [U  Y0  V  Y1] [U  Y2  V  Y3] ...
+   *   YYUV: [Y0 Y1  U   V ] [Y2 Y3  U   V ] ...
+   *   UVYY: [U   V  Y0 Y1] [U   V  Y2 Y3] ...
+   */
+
+  for (i = 0; i < 8; i++)
+    {
+      int off = i * 2;
+      uint8_t b0 = buf[off];
+      uint8_t b1 = buf[off + 1];
+      int r, g, b;
+      char line[256];
+      int n;
+
+      /* For paired formats, determine which pair we're in */
+
+      int pair_off = (i / 2) * 4;
+      uint8_t pb0 = buf[pair_off];
+      uint8_t pb1 = buf[pair_off + 1];
+      uint8_t pb2 = buf[pair_off + 2];
+      uint8_t pb3 = buf[pair_off + 3];
+
+      n = snprintf(line, sizeof(line),
+                   "  pix[%d] [%02X %02X]:", i, b0, b1);
+
+      /* YUYV: Y=even byte, U=byte1 of pair, V=byte3 of pair */
+
+      {
+        uint8_t y = (i & 1) ? pb2 : pb0;
+        uint8_t u = pb1;
+        uint8_t v = pb3;
+        yuv_to_rgb(y, u, v, &r, &g, &b);
+        n += snprintf(line + n, sizeof(line) - n,
+                      " YUYV(Y=%02X U=%02X V=%02X>R%3dG%3dB%3d)",
+                      y, u, v, r, g, b);
+      }
+
+      /* UYVY: U=byte0 of pair, Y=byte1 or byte3, V=byte2 of pair */
+
+      {
+        uint8_t u = pb0;
+        uint8_t y = (i & 1) ? pb3 : pb1;
+        uint8_t v = pb2;
+        yuv_to_rgb(y, u, v, &r, &g, &b);
+        n += snprintf(line + n, sizeof(line) - n,
+                      " UYVY(Y=%02X U=%02X V=%02X>R%3dG%3dB%3d)",
+                      y, u, v, r, g, b);
+      }
+
+      /* YYUV: Y0=b0, Y1=b1, U=b2, V=b3 (per pair) */
+
+      {
+        uint8_t y = (i & 1) ? pb1 : pb0;
+        uint8_t u = pb2;
+        uint8_t v = pb3;
+        yuv_to_rgb(y, u, v, &r, &g, &b);
+        n += snprintf(line + n, sizeof(line) - n,
+                      " YYUV(Y=%02X U=%02X V=%02X>R%3dG%3dB%3d)",
+                      y, u, v, r, g, b);
+      }
+
+      /* UVYY: U=b0, V=b1, Y0=b2, Y1=b3 (per pair) */
+
+      {
+        uint8_t u = pb0;
+        uint8_t v = pb1;
+        uint8_t y = (i & 1) ? pb3 : pb2;
+        yuv_to_rgb(y, u, v, &r, &g, &b);
+        n += snprintf(line + n, sizeof(line) - n,
+                      " UVYY(Y=%02X U=%02X V=%02X>R%3dG%3dB%3d)",
+                      y, u, v, r, g, b);
+      }
+
+      syslog(LOG_INFO, "%s\n", line);
+    }
+
+  syslog(LOG_INFO,
+         "[camera] dump: correct format = the one where U/V ≈ 0x80\n");
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_testpat
+ *
+ * Description:
+ *   Bypass camera — generate known RGB565 color bars and blit to LCD.
+ *   If bars display correctly, blit + byte order are fine and the
+ *   problem is in YUYV conversion.  If bars also look wrong, the
+ *   problem is in the LCD path.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_testpat(void)
+{
+  volatile uint8_t *buf = (volatile uint8_t *)PREVIEW_ADDR;
+  uint8_t *p = (uint8_t *)buf;
+  int ret;
+  int x, y;
+
+  /* 8 vertical color bars, each 20px wide (20*8 = 160) */
+
+  static const uint16_t bars[8] =
+    {
+      0xF800,  /* red         11111_000000_00000 */
+      0x07E0,  /* green       00000_111111_00000 */
+      0x001F,  /* blue        00000_000000_11111 */
+      0xFFE0,  /* yellow      11111_111111_00000 */
+      0x07FF,  /* cyan        00000_111111_11111 */
+      0xF81F,  /* magenta     11111_000000_11111 */
+      0xFFFF,  /* white       11111_111111_11111 */
+      0x0000,  /* black       00000_000000_00000 */
+    };
+
+  /* Auto-init PSRAM — testpat must be runnable standalone */
+
+  if (!g_framebuf_allocated)
+    {
+      ret = camera_framebuf_alloc();
+      if (ret < 0)
+        {
+          syslog(LOG_ERR, "[camera] testpat: PSRAM init failed: %d\n", ret);
+          return ret;
+        }
+    }
+
+  /* Generate big-endian RGB565 in preview buffer */
+
+  for (y = 0; y < PREVIEW_H; y++)
+    {
+      for (x = 0; x < PREVIEW_W; x++)
+        {
+          int bar = x / 20;
+          uint16_t c = bars[bar];
+          int pos = (y * PREVIEW_W + x) * 2;
+          p[pos]     = (uint8_t)(c >> 8);
+          p[pos + 1] = (uint8_t)(c & 0xff);
+        }
+    }
+
+  /* Readback verify — first pixel should be red (0xF8, 0x00) */
+
+  syslog(LOG_INFO,
+         "[camera] testpat: buf[0]=0x%02X buf[1]=0x%02X "
+         "(expect 0xF8 0x00 = red)\n",
+         buf[0], buf[1]);
+
+  if (buf[0] != 0xF8 || buf[1] != 0x00)
+    {
+      syslog(LOG_ERR,
+             "[camera] testpat: PSRAM write FAILED — "
+             "data did not stick (got 0x%02X 0x%02X)\n",
+             buf[0], buf[1]);
+      return -EIO;
+    }
+
+  /* Spot-check a few more pixels */
+
+  {
+    int pos_g  = (20 * 2) * 2;   /* x=20, first green pixel */
+    int pos_b  = (40 * 2) * 2;   /* x=40, first blue pixel */
+    int pos_w  = (120 * 2) * 2;  /* x=120, first white pixel */
+
+    syslog(LOG_INFO,
+           "[camera] testpat: green=0x%02X%02X blue=0x%02X%02X "
+           "white=0x%02X%02X\n",
+           buf[pos_g], buf[pos_g + 1],
+           buf[pos_b], buf[pos_b + 1],
+           buf[pos_w], buf[pos_w + 1]);
+  }
+
+  /* Initialize LCD and blit */
+
+  ret = bk7258_lcd_preview_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[camera] testpat: LCD init failed: %d\n", ret);
+      return ret;
+    }
+
+  bk7258_lcd_blit_rgb565(0, 0, PREVIEW_W, PREVIEW_H, (const uint8_t *)buf);
+
+  syslog(LOG_INFO,
+         "[camera] testpat: 8 color bars blitted to LCD (160x160)\n");
+  syslog(LOG_INFO,
+         "[camera] Expected: R G B Y C M W K from left to right\n");
+
+  return 0;
 }

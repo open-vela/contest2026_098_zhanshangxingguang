@@ -160,6 +160,30 @@ config CAMERA_MCLK_CONFIRMED
 		Single safety gate for MCLK: when n, mclk_enable_24mhz()
 		is never called. No separate MCLK_INIT needed.
 
+comment "DVP signal polarity — adjust if camera sync fails"
+
+config DVP_PCLK_FALLING
+	bool "Sample DVP data on PCLK falling edge"
+	default n
+	---help---
+		Default: sample on PCLK rising edge.  Set y if the camera
+		outputs data on the falling edge of PCLK.  Check with
+		oscilloscope if 'camera sync' fails.
+
+config DVP_HSYNC_ACTIVE_LOW
+	bool "HSYNC is active-low"
+	default n
+	---help---
+		Default: HSYNC is active-high.  Set y if the camera's HSYNC
+		signal is inverted (active-low during valid line).
+
+config DVP_VSYNC_ACTIVE_LOW
+	bool "VSYNC is active-low"
+	default n
+	---help---
+		Default: VSYNC is active-high.  Set y if the camera's VSYNC
+		signal is inverted (active-low during valid frame).
+
 endmenu # GC2145 Camera Configuration
 
 endmenu # Board Contest Board Configuration

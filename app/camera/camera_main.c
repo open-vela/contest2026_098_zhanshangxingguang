@@ -21,6 +21,7 @@
 #include <nuttx/config.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <arch/board/bk7258_camera.h>
@@ -39,11 +40,17 @@ int main(int argc, char *argv[])
     {
       printf("Usage: camera <command>\n");
       printf("Commands:\n");
-      printf("  id     — read GC2145 chip ID\n");
-      printf("  io     — DVP pin mux config/deconfig/readback\n");
-      printf("  init   — GC2145 RGB565 640x480 init (MCLK stays on)\n");
-      printf("  stop   — MCLK off, power off, restore pins\n");
-      printf("  buf    — PSRAM framebuf alloc + test pattern verify\n");
+      printf("  id        — read GC2145 chip ID\n");
+      printf("  io        — DVP pin mux config/deconfig/readback\n");
+      printf("  init      — GC2145 YUYV 640x480 init (MCLK stays on)\n");
+      printf("  stop      — MCLK off, power off, restore pins\n");
+      printf("  buf       — PSRAM framebuf alloc + test pattern verify\n");
+      printf("  sync      — DVP controller + VSYNC interrupt counting\n");
+      printf("  grab      — DMA single frame capture to PSRAM\n");
+      printf("  dump      — capture + hexdump + 4-format YUV analysis\n");
+      printf("  stream [n] — continuous capture (default 30, max 1000)\n");
+      printf("  preview [n] — capture + LCD display (default 100)\n");
+      printf("  testpat — color bars to LCD (no camera, tests blit)\n");
       return 1;
     }
 
@@ -66,6 +73,34 @@ int main(int argc, char *argv[])
   else if (strcmp(argv[1], "buf") == 0)
     {
       return bk7258_camera_buf();
+    }
+  else if (strcmp(argv[1], "sync") == 0)
+    {
+      return bk7258_camera_sync();
+    }
+  else if (strcmp(argv[1], "grab") == 0)
+    {
+      return bk7258_camera_grab();
+    }
+  else if (strcmp(argv[1], "dump") == 0)
+    {
+      return bk7258_camera_dump();
+    }
+  else if (strcmp(argv[1], "stream") == 0)
+    {
+      int n = 30;
+      if (argc >= 3) n = atoi(argv[2]);
+      return bk7258_camera_stream(n);
+    }
+  else if (strcmp(argv[1], "testpat") == 0)
+    {
+      return bk7258_camera_testpat();
+    }
+  else if (strcmp(argv[1], "preview") == 0)
+    {
+      int n = 100;
+      if (argc >= 3) n = atoi(argv[2]);
+      return bk7258_camera_preview(n);
     }
   else
     {
