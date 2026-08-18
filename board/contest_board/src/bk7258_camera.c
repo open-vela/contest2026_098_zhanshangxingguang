@@ -3372,7 +3372,7 @@ static void uyvy_to_rgb565_scaled(const uint8_t *src,
  *
  ****************************************************************************/
 
-int bk7258_camera_preview(int n_frames)
+int bk7258_camera_preview(int n_frames, int panel)
 {
   int ret;
   int captured;
@@ -3427,8 +3427,8 @@ int bk7258_camera_preview(int n_frames)
     }
 
   syslog(LOG_INFO,
-         "[camera] Preview start: %d frames to LCD (160x160)\n",
-         n_frames);
+         "[camera] Preview start: %d frames to LCD (160x160) panel=%d\n",
+         n_frames, panel);
 
   /* Warm-up — discard first 30 frames (sensor AE/AWB convergence) */
 
@@ -3488,7 +3488,7 @@ int bk7258_camera_preview(int n_frames)
                             CAMERA_HRES, CAMERA_VRES,
                             PREVIEW_W, PREVIEW_H);
 
-      bk7258_lcd_blit_rgb565(0, 0, 0, PREVIEW_W, PREVIEW_H,
+      bk7258_lcd_blit_rgb565(panel, 0, 0, PREVIEW_W, PREVIEW_H,
                               (const uint8_t *)preview_buf);
 
       t_end = now;

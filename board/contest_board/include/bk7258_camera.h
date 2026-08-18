@@ -152,7 +152,7 @@ int bk7258_camera_sync(void);
 int bk7258_camera_grab(void);
 
 int bk7258_camera_stream(int n_frames);
-int bk7258_camera_preview(int n_frames);
+int bk7258_camera_preview(int n_frames, int panel);
 int bk7258_camera_dump(void);
 int bk7258_camera_testpat(void);
 

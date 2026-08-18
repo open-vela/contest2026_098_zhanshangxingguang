@@ -99,8 +99,10 @@ int main(int argc, char *argv[])
   else if (strcmp(argv[1], "preview") == 0)
     {
       int n = 100;
+      int panel = 0;
       if (argc >= 3) n = atoi(argv[2]);
-      return bk7258_camera_preview(n);
+      if (argc >= 4) panel = atoi(argv[3]);
+      return bk7258_camera_preview(n, panel);
     }
   else
     {

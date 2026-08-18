@@ -252,6 +252,31 @@ config DVP_VSYNC_ACTIVE_LOW
 		Default: VSYNC is active-high.  Set y if the camera's VSYNC
 		signal is inverted (active-low during valid frame).
 
+
+choice
+	prompt "DVP capture resolution"
+	default DVP_CAPTURE_640X480
+	---help---
+		Select the sensor output resolution.
+
+config DVP_CAPTURE_640X480
+	bool "640x480 (VGA, default)"
+
+config DVP_CAPTURE_480X320
+	bool "480x320 (half VGA, less bandwidth)"
+
+endchoice
+
+config DVP_CAPTURE_HRES
+	int
+	default 640 if DVP_CAPTURE_640X480
+	default 480 if DVP_CAPTURE_480X320
+
+config DVP_CAPTURE_VRES
+	int
+	default 480 if DVP_CAPTURE_640X480
+	default 320 if DVP_CAPTURE_480X320
+
 endmenu # GC2145 Camera Configuration
 
 endmenu # Board Contest Board Configuration
