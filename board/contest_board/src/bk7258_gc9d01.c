@@ -42,6 +42,7 @@
  *   lcdtest pwr lo hi — power-on GPIO range for binary-search
  *   lcdtest scan     — GPIO pin scan for LCD power enable
  *   lcdtest spidiag  — minimal 4-byte HW SPI transfer with register dumps
+ *   lcdtest cross    — AA-centre crosshair pattern for enclosure alignment
  ****************************************************************************/
 
 /****************************************************************************
@@ -1676,6 +1677,14 @@ static void lcd_send_cmd_data(uint8_t cmd, const uint8_t *data, int len)
  *   If display_on is true, sends 0x29 (display on) at the end;
  *   otherwise leaves the display off so the caller can fill the
  *   framebuffer first (avoids flash of uninitialised GRAM).
+ *
+ *   WARNING: a caller passing display_on=false MUST issue
+ *   lcd_display_on() (or lcd_send_cmd(0x29)) itself once the frame is
+ *   ready.  Forgetting it yields a lit backlight over a black screen,
+ *   which is easily mistaken for a data-path failure — and is masked
+ *   whenever an earlier command has already turned the display on, so
+ *   it only shows up on a cold boot.  Never rely on display state left
+ *   behind by a previous command.
  *
  ****************************************************************************/
 
@@ -4280,6 +4289,133 @@ pat_bb_fallback:
   return 0;
 }
 
+/****************************************************************************
+ * Name: lcdtest_cross_draw / lcdtest_cross
+ *
+ * Description:
+ *   Enclosure-alignment pattern.  The two GC9D01 round panels are glued
+ *   to the PCB and cannot be moved, so the eye-window positions of the
+ *   3D-printed front plate must be derived from the panels — not the
+ *   other way round.
+ *
+ *   The module outline is 20.12 x 22.3 mm: the extra 2.18 mm of height
+ *   is the FPC / driver-IC bonding tab at the BOTTOM, which means the
+ *   circular 18 mm active area (AA) is NOT concentric with the glass
+ *   outline — the AA centre sits roughly 1.1 mm above the geometric
+ *   centre of the glass bounding box.  Centring the front-plate window
+ *   on the glass therefore clips the image (this is exactly how the
+ *   first printed plate failed).
+ *
+ *   This pattern turns the panel itself into a measuring instrument:
+ *   the red mark is drawn at pixel (80,80), i.e. the true AA centre,
+ *   so its physical position can be read straight off a face-on photo.
+ *
+ *   Photograph face-on with a steel rule in frame and the four M3
+ *   mounting holes visible (57.00 x 47.00 mm, D3.0 — the only exactly
+ *   known datum on the board), then measure:
+ *     1. distance between the two red marks  = true eye spacing
+ *     2. offset of each red mark from the mounting holes
+ *
+ *   Usage: lcdtest cross [left|right|both]   (default both)
+ *
+ ****************************************************************************/
+
+static void lcdtest_cross_draw(const lcd_pins_t *pins, const char *label)
+{
+  /* Power on + init.  lcd_init_sequence(true) leaves the display ON, so
+   * the pattern is visible without a separate lcd_display_on() call.
+   */
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  lcd_setup_pins(pins);
+
+  gpio_write(pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(pins->rst, 1);
+  up_mdelay(120);
+
+  lcd_init_sequence(true);
+
+  /* Black background */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+
+  /* Outer ring r=79 — the AA boundary.  Drawn as a filled disc then
+   * hollowed out, reusing lcd_fill_circle rather than a pixel loop.
+   */
+
+  lcd_fill_circle(80, 80, 79, 0xffff);
+  lcd_fill_circle(80, 80, 78, 0x0000);
+
+  /* Intermediate reference ring r=40 */
+
+  lcd_fill_circle(80, 80, 40, 0xffff);
+  lcd_fill_circle(80, 80, 39, 0x0000);
+
+  /* Full-width crosshair through the AA centre */
+
+  lcd_fill_rect(0, 80, LCD_WIDTH - 1, 80, 0xffff);
+  lcd_fill_rect(80, 0, 80, LCD_HEIGHT - 1, 0xffff);
+
+  /* 5x5 red aiming mark at the AA centre — high contrast against the
+   * white crosshair so it stays identifiable in a photograph.
+   */
+
+  lcd_fill_rect(78, 78, 82, 82, 0xf800);
+
+  syslog(LOG_INFO,
+         "[cross] %s: AA-centre=(80,80) r_outer=79 r_inner=40 "
+         "(SCLK=P%d CS=P%d MOSI=P%d)\n",
+         label, pins->sclk, pins->cs, pins->mosi);
+}
+
+static int lcdtest_cross(int argc, char *argv[])
+{
+  const char *target = "both";
+
+  if (argc > 2)
+    {
+      target = argv[2];
+    }
+
+  if (strcmp(target, "left") != 0 &&
+      strcmp(target, "right") != 0 &&
+      strcmp(target, "both") != 0)
+    {
+      syslog(LOG_ERR,
+             "[cross] usage: lcdtest cross [left|right|both]\n");
+      return -EINVAL;
+    }
+
+  if (strcmp(target, "left") == 0 || strcmp(target, "both") == 0)
+    {
+      lcdtest_cross_draw(&g_lcd_left, "LEFT");
+    }
+
+  if (strcmp(target, "right") == 0 || strcmp(target, "both") == 0)
+    {
+      lcdtest_cross_draw(&g_lcd_right, "RIGHT");
+    }
+
+  syslog(LOG_INFO,
+         "[cross] enclosure alignment: photograph face-on, steel rule in\n"
+         "[cross]   frame, all four M3 holes visible.  The RED mark is the\n"
+         "[cross]   true AA centre of each panel.  Measure (1) red-to-red\n"
+         "[cross]   distance = eye spacing, (2) red mark offset from the\n"
+         "[cross]   mounting holes (57.00x47.00 mm, D3.0).\n"
+         "[cross]   Module bbox 20.12x22.3 mm; AA centre is ~1.1 mm ABOVE\n"
+         "[cross]   the glass bounding-box centre — do not centre the\n"
+         "[cross]   window on the glass.\n");
+
+  return 0;
+}
+
 static int lcdtest_pat(int argc, char *argv[])
 {
   const char *target = "both";
@@ -5002,6 +5138,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "pat") == 0)
     {
       return lcdtest_pat(argc, argv);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "cross") == 0)
+    {
+      return lcdtest_cross(argc, argv);
     }
 
 #ifdef CONFIG_LCD_GC9D01_HW_SPI
