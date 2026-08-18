@@ -95,6 +95,7 @@ static const lcd_pins_t g_lcd_right =
 /* Currently active panel — all SPI functions use this */
 
 static const lcd_pins_t *g_active_pins = &g_lcd_left;
+static const lcd_pins_t *g_cached_pins = NULL;  /* NULL = no cache loaded yet */
 
 /****************************************************************************
  * Cached GPIO pin state for fast bit-bang
@@ -470,6 +471,8 @@ static void lcd_spi_pins_to_spi(void);
 static void lcd_spi_pins_to_gpio(void);
 static void lcd_set_pins(const lcd_pins_t *pins);
 static void lcd_setup_pins(const lcd_pins_t *pins);
+static void lcd_set_pins(const lcd_pins_t *pins);
+static void lcd_setup_pins(const lcd_pins_t *pins);
 
 #endif /* CONFIG_LCD_GC9D01_HW_SPI */
 
@@ -538,7 +541,22 @@ static inline void gpio_write_fast(const gpio_cache_t *c, int val)
 static void lcd_set_pins(const lcd_pins_t *pins)
 {
   g_active_pins = pins;
+
+  /* Rebuild GPIO caches so g_cache_cs/dc/sclk/mosi point to this panel's
+   * GPIOs.  Without this, bit-bang writes (spi_write_byte, lcd_send_cmd,
+   * lcd_send_data) target the PREVIOUS panel's pins after a switch.
+   * This caused: blit using left SPI path but right CS/DC (black screen),
+   * and four earlier bugs where g_active_pins was used as a guard but
+   * didn't reflect the actual cache state.
+   */
+
+  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
+  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
+  gpio_set_output_cached(pins->cs,   &g_cache_cs);
+  gpio_set_output_cached(pins->dc,   &g_cache_dc);
+  g_cached_pins = pins;
 }
+
 
 static void lcd_setup_pins(const lcd_pins_t *pins)
 {
@@ -902,15 +920,15 @@ static void lcd_spi_pins_to_spi(void)
       return;
     }
 
-  if (g_active_pins != &g_lcd_left)
+  if (g_cached_pins != &g_lcd_left)
     {
       return;
     }
 
   /* Only SCLK and MOSI → SPI1 peripheral.  CS stays GPIO. */
 
-  gpio_set_second_func(g_active_pins->sclk, 0);  /* SPI1_SCK  func0 */
-  gpio_set_second_func(g_active_pins->mosi, 0);  /* SPI1_MOSI func0 */
+  gpio_set_second_func(g_cached_pins->sclk, 0);  /* SPI1_SCK  func0 */
+  gpio_set_second_func(g_cached_pins->mosi, 0);  /* SPI1_MOSI func0 */
 
   g_pins_in_spi_mode = true;
 }
