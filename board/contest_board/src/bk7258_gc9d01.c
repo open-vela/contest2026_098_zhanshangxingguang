@@ -22,12 +22,16 @@
  * Bit-bang SPI driver for the GC9D01 160x160 RGB565 LCD on BK7258 DevKit.
  *
  * Pin mapping (from schematic, confirmed against ARMINO gpio_map.h):
- *   SCLK = GPIO_2  (QSPI1_CLK, func6 — unused for bit-bang)
- *   CS   = GPIO_3  (QSPI1_CSN, func6 — unused for bit-bang)
- *   MOSI = GPIO_4  (QSPI1_IO0, func6 — unused for bit-bang)
- *   DC   = GPIO_5  (QSPI1_IO1, func6 — unused for bit-bang)
+ *   SCLK = GPIO_2  — HW SPI: SPI1_SCK (func0)  / Bit-bang: GPIO output
+ *   MOSI = GPIO_4  — HW SPI: SPI1_MOSI(func0)  / Bit-bang: GPIO output
+ *   CS   = GPIO_3  — ALWAYS GPIO output (never SPI1_CSN — auto-toggle kills GC9D01)
+ *   DC   = GPIO_5  — ALWAYS GPIO output
  *   RST  = GPIO_45 (LCD_RST on schematic — was wrongly P29/DVP_PCLK)
  *   BL   = GPIO_25 (LCD_BL_PWM via Q3)
+ *
+ *   HW SPI only muxes SCLK+MOSI to SPI1 peripheral.
+ *   CS stays GPIO because SPI1_CSN auto-toggles per byte, which
+ *   resets the GC9D01 command state machine.
  *
  * The GC9D01 uses a separate DC pin (not 9-bit SPI).  DC=LOW for command,
  * DC=HIGH for data.  SPI mode 0, MSB first.
@@ -37,6 +41,7 @@
  *   lcdtest go       — one-step reliable LCD bring-up (production flow)
  *   lcdtest pwr lo hi — power-on GPIO range for binary-search
  *   lcdtest scan     — GPIO pin scan for LCD power enable
+ *   lcdtest spidiag  — minimal 4-byte HW SPI transfer with register dumps
  ****************************************************************************/
 
 /****************************************************************************
@@ -50,13 +55,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <debug.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/clock.h>
 #include <nuttx/nuttx.h>
 
 #include "bk7258_gpio.h"
 #include "bk7258_audio.h"
+#include "bk7258_psram.h"
 
 #ifdef CONFIG_EXAMPLES_GC2145_ID
 #  include <arch/board/bk7258_camera.h>
@@ -92,7 +100,14 @@ static const lcd_pins_t g_lcd_right =
   .sclk = 22, .cs = 23, .mosi = 24, .dc = 7, .rst = 6
 };
 
-/* Currently active panel — all SPI functions use this */
+/* Currently active panel — all SPI functions use this.
+ * g_active_pins tracks which panel's pin assignments are logically current.
+ * g_cached_pins tracks which panel's GPIO caches (sclk/mosi/cs/dc) are
+ * physically loaded.  lcd_set_pins() keeps both in sync.  If they ever
+ * diverge, bit-bang writes go to the wrong GPIOs — the root cause of
+ * four separate bugs (Bug A, lcdtest_chunk guard, hw_spi_usable order,
+ * and preview_init cache desync).
+ */
 
 static const lcd_pins_t *g_active_pins = &g_lcd_left;
 static const lcd_pins_t *g_cached_pins = NULL;  /* NULL = no cache loaded yet */
@@ -134,23 +149,6 @@ static gpio_cache_t g_cache_dc;
     __asm__ volatile("nop; nop; nop; nop;"); \
   } while (0)
 
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: gpio_set_output
- ****************************************************************************/
-
-static void gpio_set_output(int pin)
-{
-  uint32_t cfg = getreg32(BK7258_GPIO_CFG(pin));
-
-  cfg &= ~GPIO_CFG_SECOND_FUNC;  /* GPIO mode (bit6 = 0) */
-  cfg &= ~GPIO_CFG_OUTPUT_EN;    /* output enable (bit3 active-low: 0 = on) */
-  cfg &= ~GPIO_CFG_INPUT_EN;     /* input off (bit2: 0=off) */
-  putreg32(cfg, BK7258_GPIO_CFG(pin));
-}
 /****************************************************************************
  * Hardware SPI1 Register Definitions (BK7258)
  *
@@ -471,10 +469,26 @@ static void lcd_spi_pins_to_spi(void);
 static void lcd_spi_pins_to_gpio(void);
 static void lcd_set_pins(const lcd_pins_t *pins);
 static void lcd_setup_pins(const lcd_pins_t *pins);
-static void lcd_set_pins(const lcd_pins_t *pins);
-static void lcd_setup_pins(const lcd_pins_t *pins);
 
 #endif /* CONFIG_LCD_GC9D01_HW_SPI */
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: gpio_set_output
+ ****************************************************************************/
+
+static void gpio_set_output(int pin)
+{
+  uint32_t cfg = getreg32(BK7258_GPIO_CFG(pin));
+
+  cfg &= ~GPIO_CFG_SECOND_FUNC;  /* GPIO mode (bit6 = 0) */
+  cfg &= ~GPIO_CFG_OUTPUT_EN;    /* output enable (bit3 active-low: 0 = on) */
+  cfg &= ~GPIO_CFG_INPUT_EN;     /* input off (bit2: 0=off) */
+  putreg32(cfg, BK7258_GPIO_CFG(pin));
+}
 
 /****************************************************************************
  * Name: gpio_write
@@ -535,48 +549,13 @@ static inline void gpio_write_fast(const gpio_cache_t *c, int val)
 }
 
 /****************************************************************************
- * Name: lcd_set_pins / lcd_setup_pins
+ * Name: gpio_set_second_func
+ *
+ * Description:
+ *   Configure a GPIO pin for peripheral (second) function.
+ *
  ****************************************************************************/
 
-static void lcd_set_pins(const lcd_pins_t *pins)
-{
-  g_active_pins = pins;
-
-  /* Rebuild GPIO caches so g_cache_cs/dc/sclk/mosi point to this panel's
-   * GPIOs.  Without this, bit-bang writes (spi_write_byte, lcd_send_cmd,
-   * lcd_send_data) target the PREVIOUS panel's pins after a switch.
-   * This caused: blit using left SPI path but right CS/DC (black screen),
-   * and four earlier bugs where g_active_pins was used as a guard but
-   * didn't reflect the actual cache state.
-   */
-
-  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
-  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
-  gpio_set_output_cached(pins->cs,   &g_cache_cs);
-  gpio_set_output_cached(pins->dc,   &g_cache_dc);
-  g_cached_pins = pins;
-}
-
-
-static void lcd_setup_pins(const lcd_pins_t *pins)
-{
-  lcd_set_pins(pins);
-  gpio_set_output(pins->rst);
-
-  /* Cache SCLK/MOSI/CS/DC for fast bit-bang */
-
-  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
-  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
-  gpio_set_output_cached(pins->cs,   &g_cache_cs);
-  gpio_set_output_cached(pins->dc,   &g_cache_dc);
-
-  /* Initial idle state: CS=HIGH, DC=HIGH, SCLK=LOW, MOSI=LOW */
-
-  gpio_write_fast(&g_cache_cs,   1);
-  gpio_write_fast(&g_cache_dc,   1);
-  gpio_write_fast(&g_cache_sclk, 0);
-  gpio_write_fast(&g_cache_mosi, 0);
-}
 #ifdef CONFIG_LCD_GC9D01_HW_SPI
 
 static void gpio_set_second_func(int pin, int func_sel)
@@ -920,15 +899,15 @@ static void lcd_spi_pins_to_spi(void)
       return;
     }
 
-  if (g_cached_pins != &g_lcd_left)
+  if (g_active_pins != &g_lcd_left)
     {
       return;
     }
 
   /* Only SCLK and MOSI → SPI1 peripheral.  CS stays GPIO. */
 
-  gpio_set_second_func(g_cached_pins->sclk, 0);  /* SPI1_SCK  func0 */
-  gpio_set_second_func(g_cached_pins->mosi, 0);  /* SPI1_MOSI func0 */
+  gpio_set_second_func(g_active_pins->sclk, 0);  /* SPI1_SCK  func0 */
+  gpio_set_second_func(g_active_pins->mosi, 0);  /* SPI1_MOSI func0 */
 
   g_pins_in_spi_mode = true;
 }
@@ -989,12 +968,12 @@ static int lcd_spi_write(const uint8_t *data, size_t len,
    * left screen ignores all data, right screen gets no clock.
    */
 
-  if (g_active_pins != &g_lcd_left)
+  if (g_cached_pins != &g_lcd_left)
     {
       syslog(LOG_ERR,
              "[lcd] lcd_spi_write called with wrong pins "
              "(cached=%s, need left)\n",
-             g_active_pins ? "right" : "none");
+             g_cached_pins ? "right" : "none");
       return -EINVAL;
     }
 #ifdef CONFIG_LCD_GC9D01_SPI_VERIFY
@@ -1298,6 +1277,296 @@ static int lcd_spi_write(const uint8_t *data, size_t len,
 #endif /* CONFIG_LCD_GC9D01_HW_SPI */
 
 /****************************************************************************
+ * Name: lcd_spidiag
+ *
+ * Description:
+ *   Minimal SPI1 diagnostic: send 1 cmd byte + 4 data bytes, printing
+ *   register snapshots at every decision point.  Invoked as "lcd spidiag".
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+
+static void spidiag_decode_ctrl(uint32_t ctrl)
+{
+  syslog(LOG_INFO,
+         "[spidiag]   master=%d enable=%d cpol=%d cpha=%d "
+         "clk_rate=%lu tx_udf_int_en=%d\n",
+         !!(ctrl & SPI_CTRL_MASTER_BIT),
+         !!(ctrl & SPI_CTRL_ENABLE_BIT),
+         !!(ctrl & SPI_CTRL_CPOL_BIT),
+         !!(ctrl & SPI_CTRL_CPHA_BIT),
+         (unsigned long)((ctrl >> SPI_CTRL_CLK_RATE_SHIFT) & SPI_CTRL_CLK_RATE_MASK),
+         !!(ctrl & (1u << 4)));
+}
+
+static void spidiag_decode_cfg(uint32_t cfg)
+{
+  syslog(LOG_INFO,
+         "[spidiag]   tx_en=%d rx_en=%d tx_finish_int_en=%d "
+         "rx_finish_int_en=%d tx_trans_len=%lu\n",
+         !!(cfg & SPI_CFG_TX_EN_BIT),
+         !!(cfg & SPI_CFG_RX_EN_BIT),
+         !!(cfg & SPI_CFG_TX_FINISH_INT_EN_BIT),
+         !!(cfg & SPI_CFG_RX_FINISH_INT_EN_BIT),
+         (unsigned long)((cfg >> SPI_CFG_TX_TRANS_LEN_SHIFT) & SPI_CFG_TX_TRANS_LEN_MASK));
+}
+
+static int lcd_spidiag(void)
+{
+  uint32_t ctrl;
+  uint32_t cfg;
+  uint32_t st;
+  uint32_t poll_cnt;
+  uint32_t cfg_before;
+  uint32_t cfg_after;
+  uint32_t func_before;
+  uint32_t func_after;
+  uintptr_t func_reg;
+  uint32_t shift;
+  int i;
+
+  static const uint8_t diag_data[4] = {0xaa, 0x55, 0x33, 0xcc};
+
+  /* Self-contained: ensure left screen pins + SPI1 are initialized.
+   * lcd_setup_pins is idempotent (skips if already done for this panel).
+   * This allows running "lcdtest spidiag" without a prior "lcdtest go".
+   * We only init pins+SPI, NOT the panel display sequence.
+   */
+
+  lcd_setup_pins(&g_lcd_left);
+
+  if (!g_hw_spi_capable)
+    {
+      syslog(LOG_ERR, "[spidiag] HW SPI not capable, abort\n");
+      return -ENODEV;
+    }
+
+  /* [F-before] GPIO pin state BEFORE mux */
+
+  cfg_before = getreg32(BK7258_GPIO_CFG(g_lcd_left.sclk));
+  func_reg = BK7258_SYS_GPIO_FUNC(g_lcd_left.sclk);
+  shift = BK7258_GPIO_FUNC_SHIFT(g_lcd_left.sclk);
+  func_before = (getreg32(func_reg) >> shift) & BK7258_GPIO_FUNC_MASK;
+
+  syslog(LOG_INFO,
+         "[spidiag] GPIO BEFORE mux: P%d cfg=0x%05lX func=%lu\n",
+         g_lcd_left.sclk, (unsigned long)cfg_before,
+         (unsigned long)func_before);
+
+  /* Mux to SPI */
+
+  lcd_spi_pins_to_spi();
+
+  /* [F-after] GPIO pin state AFTER mux */
+
+  cfg_after = getreg32(BK7258_GPIO_CFG(g_lcd_left.sclk));
+  func_reg = BK7258_SYS_GPIO_FUNC(g_lcd_left.sclk);
+  shift = BK7258_GPIO_FUNC_SHIFT(g_lcd_left.sclk);
+  func_after = (getreg32(func_reg) >> shift) & BK7258_GPIO_FUNC_MASK;
+
+  syslog(LOG_INFO,
+         "[spidiag] GPIO AFTER  mux: P%d cfg=0x%05lX func=%lu\n",
+         g_lcd_left.sclk, (unsigned long)cfg_after,
+         (unsigned long)func_after);
+
+  /* [A] Post-init register dump */
+
+  ctrl = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+  cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+  st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+  syslog(LOG_INFO,
+         "[spidiag] [A] post-init: CTRL=0x%08lX CFG=0x%08lX "
+         "INT_STATUS=0x%08lX\n",
+         (unsigned long)ctrl, (unsigned long)cfg, (unsigned long)st);
+  spidiag_decode_ctrl(ctrl);
+  spidiag_decode_cfg(cfg);
+
+  /* --- Start a minimal transfer: 4 data bytes --- */
+
+  /* Clear FIFO + interrupts */
+
+  putreg32(SPI_INT_TX_FIFO_CLR | SPI_INT_RX_FIFO_CLR,
+           SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+  putreg32(0xFFFFFFFF, SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+  /* Set trans_len via read-modify-write */
+
+  cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+  cfg &= ~(SPI_CFG_TX_TRANS_LEN_MASK << SPI_CFG_TX_TRANS_LEN_SHIFT);
+  cfg |= (4u << SPI_CFG_TX_TRANS_LEN_SHIFT);
+  cfg |= SPI_CFG_TX_EN_BIT;
+  cfg |= SPI_CFG_TX_FINISH_INT_EN_BIT;
+  putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+
+  /* [B] Post-translen CFG */
+
+  cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+  syslog(LOG_INFO,
+         "[spidiag] [B] after set trans_len: CFG=0x%08lX\n",
+         (unsigned long)cfg);
+  spidiag_decode_cfg(cfg);
+
+  /* Assert CS (DC=1 for data) */
+
+  gpio_write_fast(&g_cache_dc, 1);
+  gpio_write_fast(&g_cache_cs, 0);
+
+  /* [C] Feed 4 bytes one at a time */
+
+  for (i = 0; i < 4; i++)
+    {
+      poll_cnt = SPI_POLL_TIMEOUT;
+
+      while (!(getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE)) &
+               SPI_INT_TX_FIFO_WR_READY))
+        {
+          if (--poll_cnt == 0)
+            {
+              st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+              syslog(LOG_ERR,
+                     "[spidiag] FIFO timeout at byte %d, "
+                     "INT_STATUS=0x%08lX\n",
+                     i, (unsigned long)st);
+              gpio_write_fast(&g_cache_cs, 1);
+              lcd_spi_pins_to_gpio();
+              return -ETIMEDOUT;
+            }
+        }
+
+      putreg32(diag_data[i], SPI_REG_DATA(BK7258_SPI1_BASE));
+    }
+
+  /* [C] After last byte written */
+
+  st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+  syslog(LOG_INFO,
+         "[spidiag] [C] after last byte: INT_STATUS=0x%08lX\n",
+         (unsigned long)st);
+
+  /* [D] Poll for tx_finish, printing status up to 5 times */
+
+  {
+    int prints = 0;
+    poll_cnt = SPI_POLL_TIMEOUT;
+
+    for (;;)
+      {
+        st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+        if (st & (SPI_INT_TX_FINISH | SPI_INT_TX_UNDERFLOW))
+          {
+            break;
+          }
+
+        if (prints < 5)
+          {
+            syslog(LOG_INFO,
+                   "[spidiag] [D] polling: INT_STATUS=0x%08lX\n",
+                   (unsigned long)st);
+            prints++;
+          }
+
+        if (--poll_cnt == 0)
+          {
+            st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+            syslog(LOG_ERR,
+                   "[spidiag] [E] TIMEOUT: INT_STATUS=0x%08lX "
+                   "polls=%lu\n",
+                   (unsigned long)st,
+                   (unsigned long)SPI_POLL_TIMEOUT);
+            gpio_write_fast(&g_cache_cs, 1);
+            lcd_spi_pins_to_gpio();
+            return -ETIMEDOUT;
+          }
+      }
+
+    /* [E] Success */
+
+    syslog(LOG_INFO,
+           "[spidiag] [E] OK: INT_STATUS=0x%08lX polls=%lu\n",
+           (unsigned long)st,
+           (unsigned long)(SPI_POLL_TIMEOUT - poll_cnt));
+  }
+
+  /* Clear completion bits */
+
+  putreg32(st & (SPI_INT_TX_FINISH | SPI_INT_TX_UNDERFLOW),
+           SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+  /* Deassert CS, restore pins */
+
+  gpio_write_fast(&g_cache_cs, 1);
+  lcd_spi_pins_to_gpio();
+
+  syslog(LOG_INFO, "[spidiag] done — 4 bytes sent successfully\n");
+  return 0;
+}
+
+#endif /* CONFIG_LCD_GC9D01_HW_SPI */
+
+/****************************************************************************
+ * Name: lcd_set_pins / lcd_setup_pins
+ ****************************************************************************/
+
+static void lcd_set_pins(const lcd_pins_t *pins)
+{
+  g_active_pins = pins;
+
+  /* Rebuild GPIO caches so g_cache_cs/dc/sclk/mosi point to this panel's
+   * GPIOs.  Without this, bit-bang writes (spi_write_byte, lcd_send_cmd,
+   * lcd_send_data) target the PREVIOUS panel's pins after a switch.
+   * This caused: blit using left SPI path but right CS/DC (black screen),
+   * and four earlier bugs where g_active_pins was used as a guard but
+   * didn't reflect the actual cache state.
+   */
+
+  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
+  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
+  gpio_set_output_cached(pins->cs,   &g_cache_cs);
+  gpio_set_output_cached(pins->dc,   &g_cache_dc);
+  g_cached_pins = pins;
+}
+
+static void lcd_setup_pins(const lcd_pins_t *pins)
+{
+  lcd_set_pins(pins);
+  gpio_set_output(pins->rst);
+
+  /* Always set up GPIO mode first — needed for command bit-bang */
+
+  gpio_set_output_cached(pins->sclk, &g_cache_sclk);
+  gpio_set_output_cached(pins->mosi, &g_cache_mosi);
+  gpio_set_output_cached(pins->cs,   &g_cache_cs);
+  gpio_set_output_cached(pins->dc,   &g_cache_dc);
+
+  /* Initial idle state: CS=HIGH, DC=HIGH, SCLK=LOW, MOSI=LOW */
+
+  gpio_write_fast(&g_cache_cs,   1);
+  gpio_write_fast(&g_cache_dc,   1);
+  gpio_write_fast(&g_cache_sclk, 0);
+  gpio_write_fast(&g_cache_mosi, 0);
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  /* Initialize SPI1 for left screen.  Pins stay in GPIO mode until
+   * data transfer time.  Failure is non-fatal — falls back to bit-bang.
+   */
+
+  if (pins->sclk == 2)
+    {
+      int ret = lcd_spi_init(pins);
+
+      if (ret < 0)
+        {
+          syslog(LOG_ERR,
+                 "[lcd] SPI1 init failed (%d), using bit-bang\n", ret);
+        }
+    }
+#endif
+}
+
+/****************************************************************************
  * Name: spi_write_byte
  *
  * Description:
@@ -1326,6 +1595,15 @@ static void spi_write_byte(uint8_t byte)
 
 static void lcd_send_cmd(uint8_t cmd)
 {
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  /* Commands always use bit-bang — ensure GPIO mode */
+
+  if (lcd_hw_spi_usable())
+    {
+      lcd_spi_pins_to_gpio();
+    }
+#endif
+
   gpio_write_fast(&g_cache_dc, 0);
   gpio_write_fast(&g_cache_cs, 0);
   spi_write_byte(cmd);
@@ -1334,6 +1612,41 @@ static void lcd_send_cmd(uint8_t cmd)
 
 static void lcd_send_data(const uint8_t *data, int len)
 {
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  /* Use hardware SPI for data when available (left screen).
+   * Switch pins to SPI mode, send, switch back to GPIO.
+   * Falls back to bit-bang on timeout.
+   */
+
+  if (lcd_hw_spi_usable() && len >= SPI_HWSPI_MIN_LEN)
+    {
+      gpio_write_fast(&g_cache_dc, 1);
+
+      /* Mux SCLK+MOSI to SPI1 peripheral BEFORE asserting CS.
+       * Previous code asserted CS first, then muxed — the mux switch
+       * can glitch SCLK while CS is low, confusing the panel.
+       * After mux, SCLK is driven by SPI1 in mode 0 (CPOL=0) → idle low.
+       */
+
+      lcd_spi_pins_to_spi();
+      gpio_write_fast(&g_cache_cs, 0);
+
+      if (lcd_spi_write(data, len, NULL) == 0)
+        {
+          gpio_write_fast(&g_cache_cs, 1);
+          lcd_spi_pins_to_gpio();
+          return;
+        }
+
+      /* Timeout — fallback to bit-bang */
+
+      gpio_write_fast(&g_cache_cs, 1);
+      lcd_spi_pins_to_gpio();
+    }
+#endif
+
+  /* Bit-bang fallback */
+
   int i;
 
   gpio_write_fast(&g_cache_dc, 1);
@@ -1473,10 +1786,7 @@ static void lcd_fill_rect(uint16_t x0, uint16_t y0,
 {
   uint8_t ca[4];
   uint8_t ra[4];
-  uint8_t hi = (color >> 8) & 0xff;
-  uint8_t lo = color & 0xff;
   int npix = (int)(x1 - x0 + 1) * (int)(y1 - y0 + 1);
-  int i;
 
   /* CASET */
 
@@ -1494,18 +1804,83 @@ static void lcd_fill_rect(uint16_t x0, uint16_t y0,
   ra[3] = y1 & 0xff;
   lcd_send_cmd_data(0x2b, ra, 4);
 
-  /* RAMWR + pixel data */
+  /* RAMWR + pixel data — use HW SPI for bulk fill when available */
 
   lcd_send_cmd(0x2c);
-  gpio_write_fast(&g_cache_dc, 1);
-  gpio_write_fast(&g_cache_cs, 0);
-  for (i = 0; i < npix; i++)
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  if (lcd_hw_spi_usable())
     {
-      spi_write_byte(hi);
-      spi_write_byte(lo);
+      /* Static tile buffer — avoids large stack allocation.
+       * SPI_TILE_BYTES defaults to 1024 (configurable up to 4095).
+       * At 1024: 51200 bytes / 1024 = 50 SPI transactions per frame
+       * (vs 800 at the 64-byte FIFO_DEPTH).
+       */
+
+      static uint8_t tile[SPI_TILE_BYTES];
+      uint8_t hi = (color >> 8) & 0xff;
+      uint8_t lo = color & 0xff;
+      int i;
+
+      for (i = 0; i < SPI_TILE_BYTES; i += 2)
+        {
+          tile[i]     = hi;
+          tile[i + 1] = lo;
+        }
+
+      gpio_write_fast(&g_cache_dc, 1);
+      gpio_write_fast(&g_cache_cs, 0);
+      lcd_spi_pins_to_spi();
+
+      while (npix > 0)
+        {
+          int batch = npix;
+
+          if (batch > SPI_TILE_BYTES / 2)
+            {
+              batch = SPI_TILE_BYTES / 2;
+            }
+
+          if (lcd_spi_write(tile, batch * 2, NULL) != 0)
+            {
+              goto fill_bb_fallback;
+            }
+
+          npix -= batch;
+        }
+
+      lcd_spi_pins_to_gpio();
+      gpio_write_fast(&g_cache_cs, 1);
+      return;
     }
 
-  gpio_write_fast(&g_cache_cs, 1);
+fill_bb_fallback:
+  /* Restore GPIO mode if HW SPI failed mid-transfer */
+
+  if (g_pins_in_spi_mode)
+    {
+      lcd_spi_pins_to_gpio();
+    }
+#endif
+
+  /* Bit-bang fallback */
+
+  {
+    uint8_t hi = (color >> 8) & 0xff;
+    uint8_t lo = color & 0xff;
+    int i;
+
+    gpio_write_fast(&g_cache_dc, 1);
+    gpio_write_fast(&g_cache_cs, 0);
+
+    for (i = 0; i < npix; i++)
+      {
+        spi_write_byte(hi);
+        spi_write_byte(lo);
+      }
+
+    gpio_write_fast(&g_cache_cs, 1);
+  }
 }
 
 /****************************************************************************
@@ -1515,14 +1890,12 @@ static void lcd_fill_rect(uint16_t x0, uint16_t y0,
  *   Blit a full RGB565 framebuffer to the LCD.
  *   Sends CASET/RASET/RAMWR then streams pixel data in rows.
  *
- *   No scaling — the buffer must match w×h exactly.
- *   Buffer layout: big-endian RGB565 (high byte first), row-major.
- *
- *   Public so camera preview can call it.
+ *   panel: 0=left (SPI1 HW), 1=right (bit-bang), other=left
  *
  ****************************************************************************/
 
-void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
+void bk7258_lcd_blit_rgb565(int panel,
+                             uint16_t x0, uint16_t y0,
                              uint16_t w, uint16_t h,
                              const uint8_t *rgb565)
 {
@@ -1530,8 +1903,19 @@ void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
   uint8_t ra[4];
   uint16_t x1 = x0 + w - 1;
   uint16_t y1 = y0 + h - 1;
-  int row;
-  int row_bytes = (int)w * 2;
+
+  /* Auto-switch panel if different from current */
+
+  if (panel == 1 && g_active_pins != &g_lcd_right)
+    {
+      lcd_set_pins(&g_lcd_right);
+      lcd_setup_pins(&g_lcd_right);
+    }
+  else if (panel != 1 && g_active_pins != &g_lcd_left)
+    {
+      lcd_set_pins(&g_lcd_left);
+      lcd_setup_pins(&g_lcd_left);
+    }
 
   /* CASET */
 
@@ -1549,24 +1933,69 @@ void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
   ra[3] = y1 & 0xff;
   lcd_send_cmd_data(0x2b, ra, 4);
 
-  /* RAMWR + pixel data, one row at a time */
+  /* RAMWR — CS must stay LOW for entire pixel transfer (GC9D01 datasheet).
+   * lcd_spi_write() internally chunks by SPI_MAX_CHUNK_BYTES (1024)
+   * without touching CS, so a single call for the whole frame is safe.
+   */
 
   lcd_send_cmd(0x2c);
 
-  for (row = 0; row < (int)h; row++)
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  /* Use HW SPI for pixel data when available (left screen only) */
+
+  if (lcd_hw_spi_usable())
     {
+      int total = (int)w * (int)h * 2;
+      size_t sent = 0;
+
       gpio_write_fast(&g_cache_dc, 1);
       gpio_write_fast(&g_cache_cs, 0);
+      lcd_spi_pins_to_spi();
 
-      const uint8_t *rowp = rgb565 + row * row_bytes;
-      int i;
-      for (i = 0; i < row_bytes; i++)
+      if (lcd_spi_write(rgb565, total, &sent) != 0)
         {
-          spi_write_byte(rowp[i]);
+          /* HW SPI timeout mid-frame.
+           * RAMWR pointer has advanced by 'sent' bytes — we cannot
+           * reliably resume or resend.  Abort cleanly: raise CS to
+           * terminate RAMWR, restore GPIO, log and return.
+           * A partially-drawn frame is better than a garbled one.
+           */
+
+          gpio_write_fast(&g_cache_cs, 1);
+          syslog(LOG_ERR,
+                 "[blit] HW SPI timeout, abort frame "
+                 "(sent=%lu/%d)\n",
+                 (unsigned long)sent, total);
+          return;
         }
 
+      lcd_spi_pins_to_gpio();
       gpio_write_fast(&g_cache_cs, 1);
+      return;
     }
+#endif
+
+  /* Bit-bang fallback (right screen, or HW SPI not compiled in).
+   * CS stays LOW for the entire transfer — same as lcd_fill_rect() and
+   * lcdtest_pat().  Each pixel is 2 bytes (RGB565 big-endian).
+   */
+
+  {
+    int i;
+    int total = (int)w * (int)h;
+
+    gpio_write_fast(&g_cache_dc, 1);
+    gpio_write_fast(&g_cache_cs, 0);
+
+    for (i = 0; i < total; i++)
+      {
+        spi_write_byte(rgb565[0]);
+        spi_write_byte(rgb565[1]);
+        rgb565 += 2;
+      }
+
+    gpio_write_fast(&g_cache_cs, 1);
+  }
 }
 
 /****************************************************************************
@@ -1595,34 +2024,44 @@ int bk7258_lcd_preview_init(void)
 
   gpio_set_output(LCD_PIN_LDO33_EN);
   gpio_write(LCD_PIN_LDO33_EN, 1);
-  up_mdelay(50);   /* wait for LDO output to stabilize */
+  up_mdelay(50);
 
   /* Backlight on */
 
   gpio_set_output(LCD_PIN_BL);
   gpio_write(LCD_PIN_BL, 1);
 
-  /* Configure left-screen SPI pins (P2/P3/P4/P5/P45) */
+  /* --- Left screen (P2/P3/P4/P5/P45) --- */
 
   lcd_setup_pins(&g_lcd_left);
 
-  /* Hardware reset: RST low → 15ms → RST high → 120ms */
-
-  gpio_write(g_active_pins->rst, 0);
+  gpio_write(g_lcd_left.rst, 0);
   up_mdelay(15);
-  gpio_write(g_active_pins->rst, 1);
+  gpio_write(g_lcd_left.rst, 1);
   up_mdelay(120);
 
-  /* GC9D01 init sequence with display_on */
-
   lcd_init_sequence(true);
-
-  /* Fill black to confirm screen is alive */
-
   lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
 
+  /* --- Right screen (P22/P23/P24/P7/P6) — bit-bang only --- */
+
+  lcd_setup_pins(&g_lcd_right);
+
+  gpio_write(g_lcd_right.rst, 0);
+  up_mdelay(15);
+  gpio_write(g_lcd_right.rst, 1);
+  up_mdelay(120);
+
+  lcd_init_sequence(true);
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0x0000);
+
+  /* Switch back to left as default active panel */
+
+  lcd_set_pins(&g_lcd_left);
+
   syslog(LOG_INFO,
-         "[lcd] preview init done — screen should show black\n");
+         "[lcd] dual-screen init done, HW SPI %s\n",
+         lcd_hw_spi_usable() ? "ON (left screen)" : "OFF (bit-bang)");
 
   return 0;
 }
@@ -2477,8 +2916,9 @@ static int lcdtest_stages(void)
   syslog(LOG_INFO,
          "[lcdtest] Stage C: fill 40x40 red at (60,60) on both screens\n");
 
-  /* Left screen — currently active from Stage B */
+  /* Left screen — explicit setup, don't rely on leftover g_active_pins */
 
+  lcd_setup_pins(&g_lcd_left);
   lcd_fill_rect(60, 60,
                 60 + SQ_SIZE - 1, 60 + SQ_SIZE - 1,
                 0xf800);
@@ -2749,9 +3189,6 @@ static int lcdtest_pwr(int lo, int hi)
 
 static int lcdtest_go(void)
 {
-  int pin;
-  int count = 0;
-
 #ifdef CONFIG_EXAMPLES_GC2145_ID
   if (bk7258_camera_dvp_active())
     {
@@ -2762,68 +3199,20 @@ static int lcdtest_go(void)
     }
 #endif
 
-  /* Step 1: drive GPIO 0-52 high, skip reserved pins */
+  /* Step 1: LDO_3V3 enable (P52).
+   * Early development blindly drove GPIO 0-52 high to find the power
+   * enable pin.  Binary search confirmed LDO33_EN=P52 alone is
+   * sufficient.  The blind scan also drove P44(LCD_TE), P27/P28(DVP)
+   * and other unrelated pins — leaving it active is a hazard.
+   */
 
-  syslog(LOG_INFO,
-         "[go] step1: GPIO 0-52 high (skip reserved)\n");
+  syslog(LOG_INFO, "[go] step1: LDO_3V3 ON (P52)\n");
 
-  for (pin = 0; pin <= 52; pin++)
-    {
-      /* LCD signals (both eyes + backlight) */
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);   /* wait for LDO output to stabilize */
 
-      if (pin == 2 || pin == 3 || pin == 4 || pin == 5 ||
-          pin == 6 || pin == 7 || pin == 22 || pin == 23 ||
-          pin == 24 || pin == 25 || pin == 45)
-        {
-          continue;
-        }
-
-      /* UART0 console */
-
-      if (pin == 10 || pin == 11)
-        {
-          continue;
-        }
-
-      /* Vibration motor (P7 is right-eye DC, only skip P8) */
-
-      if (pin == 8)
-        {
-          continue;
-        }
-
-      /* Indicator LEDs */
-
-      if (pin == 38 || pin == 39)
-        {
-          continue;
-        }
-
-      /* SWD debug port: SWCLK=20, SWDIO=21 */
-
-      if (pin == 20 || pin == 21)
-        {
-          continue;
-        }
-
-      /* DVP camera connector: P29–P39 */
-
-      if (lcdtest_is_dvp_reserved_pin(pin))
-        {
-          continue;
-        }
-
-      gpio_set_output(pin);
-      gpio_write(pin, 1);
-      count++;
-    }
-
-  syslog(LOG_INFO, "[go] step1 done: %d pins driven high\n", count);
-
-  /* Step 2: wait for power rails to settle */
-
-  syslog(LOG_INFO, "[go] step2: wait 500 ms for power stable\n");
-  up_mdelay(500);
+  syslog(LOG_INFO, "[go] step1 done\n");
 
   /* Step 3: backlight on (shared) */
 
@@ -3362,10 +3751,7 @@ static int lcdtest_oeye(void)
 
   up_mdelay(500);
 
-  gpio_set_output(LCD_PIN_BL);
-  gpio_write(LCD_PIN_BL, 1);
-
-  /* Left panel init */
+  /* Left panel init (no display-on yet — wait until white is ready) */
 
   lcd_setup_pins(&g_lcd_left);
   gpio_write(g_active_pins->rst, 0);
@@ -3373,9 +3759,8 @@ static int lcdtest_oeye(void)
   gpio_write(g_active_pins->rst, 1);
   up_mdelay(120);
   lcd_init_sequence(false);
-  lcd_display_on();
 
-  /* Right panel init */
+  /* Right panel init (no display-on yet) */
 
   lcd_setup_pins(&g_lcd_right);
   gpio_write(g_active_pins->rst, 0);
@@ -3383,14 +3768,29 @@ static int lcdtest_oeye(void)
   gpio_write(g_active_pins->rst, 1);
   up_mdelay(120);
   lcd_init_sequence(false);
-  lcd_display_on();
 
-  /* White background — once per panel, never again in the loop */
+  /* Fill both panels white BEFORE display-on and backlight.
+   * This eliminates the flash of random framebuffer content
+   * that occurs when backlight and display-on happen first.
+   */
 
   lcd_set_pins(&g_lcd_left);
   draw_oeye_bg();
   lcd_set_pins(&g_lcd_right);
   draw_oeye_bg();
+
+  /* White is ready — now enable display on both panels */
+
+  lcd_set_pins(&g_lcd_left);
+  lcd_display_on();
+  lcd_set_pins(&g_lcd_right);
+  lcd_display_on();
+
+  /* Backlight ON last — screen shows white, not random garbage */
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
   lcd_set_pins(&g_lcd_left);
 
   syslog(LOG_INFO,
@@ -3609,8 +4009,901 @@ static int lcdtest_blink(int count)
  *     lcdtest mic      — raw ADC capture + RMS dump
  *     lcdtest pwr lo hi — power-on GPIO range for binary-search
  *     lcdtest scan     — GPIO pin scan for LCD power enable
+ *     lcdtest one left|right — single-panel isolation test (red fill)
+ *     lcdtest pat [left|right|both] — quantifiable test pattern
  *
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: lcdtest_pat
+ *
+ * Description:
+ *   Quantifiable test pattern for diagnosing byte-level SPI artifacts.
+ *   Draws a single continuous frame (one CASET/RASET + one 0x2C + entire
+ *   pixel data in a single CS-low session) to eliminate multi-transfer
+ *   boundary interference.
+ *
+ *   Pattern (160×160 RGB565):
+ *     a) 1px alternating vertical stripes: even col white(0xFFFF),
+ *        odd col black(0x0000).  Any byte offset flips entire regions.
+ *     b) 1px red(0xF800) border on all 4 edges.
+ *     c) 8×8 solid squares at four corners: top-left green(0x07E0),
+ *        top-right blue(0x001F), bottom-left yellow(0xFFE0),
+ *        bottom-right magenta(0xF81F).  Detects shift/mirror.
+ *     d) 1px horizontal white line at y=80.  Phase reference for
+ *        vertical stripes.
+ *
+ *   Usage: lcdtest pat [left|right|both]  (default both)
+ *
+ ****************************************************************************/
+
+static int lcdtest_pat_draw(const lcd_pins_t *pins, const char *label)
+{
+  /* Static line buffer — 160 pixels × 2 bytes = 320 bytes.
+   * Must be static: lcdtest stack is only 2048 bytes.
+   */
+
+  static uint8_t linebuf[LCD_WIDTH * 2];
+  int x;
+  int y;
+  size_t total_bytes = 0;
+
+  /* Power on + init */
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  lcd_setup_pins(pins);
+
+  gpio_write(pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(pins->rst, 1);
+  up_mdelay(120);
+
+  lcd_init_sequence(false);
+
+  syslog(LOG_INFO,
+         "[pat] %s: init done (SCLK=P%d CS=P%d MOSI=P%d)\n",
+         label, pins->sclk, pins->cs, pins->mosi);
+
+  /* CASET + RASET for full screen */
+
+  {
+    uint8_t ca[4] = {0, 0, 0, LCD_WIDTH - 1};
+    uint8_t ra[4] = {0, 0, 0, LCD_HEIGHT - 1};
+
+    lcd_send_cmd_data(0x2a, ca, 4);
+    lcd_send_cmd_data(0x2b, ra, 4);
+  }
+
+  /* RAMWR — send pixel data in one continuous CS-low session */
+
+  lcd_send_cmd(0x2c);
+
+  /* Switch to SPI mode if using HW path, assert CS once */
+
+  gpio_write_fast(&g_cache_dc, 1);
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  if (lcd_hw_spi_usable())
+    {
+      lcd_spi_pins_to_spi();
+    }
+#endif
+
+  gpio_write_fast(&g_cache_cs, 0);
+
+  for (y = 0; y < LCD_HEIGHT; y++)
+    {
+      for (x = 0; x < LCD_WIDTH; x++)
+        {
+          uint16_t color;
+          int off = x * 2;
+
+          /* (a) Default: alternating vertical stripes */
+
+          if ((x & 1) == 0)
+            {
+              color = 0xffff;  /* even column: white */
+            }
+          else
+            {
+              color = 0x0000;  /* odd column: black */
+            }
+
+          /* (d) Horizontal white line at y=80 */
+
+          if (y == 80)
+            {
+              color = 0xffff;
+            }
+
+          /* (b) 1px red border */
+
+          if (y == 0 || y == LCD_HEIGHT - 1 ||
+              x == 0 || x == LCD_WIDTH - 1)
+            {
+              color = 0xf800;
+            }
+
+          /* (c) Corner 8×8 squares (override stripes + border) */
+
+          if (y < 8 && x < 8)
+            {
+              color = 0x07e0;  /* top-left: green */
+            }
+          else if (y < 8 && x >= LCD_WIDTH - 8)
+            {
+              color = 0x001f;  /* top-right: blue */
+            }
+          else if (y >= LCD_HEIGHT - 8 && x < 8)
+            {
+              color = 0xffe0;  /* bottom-left: yellow */
+            }
+          else if (y >= LCD_HEIGHT - 8 && x >= LCD_WIDTH - 8)
+            {
+              color = 0xf81f;  /* bottom-right: magenta */
+            }
+
+          linebuf[off]     = (uint8_t)(color >> 8);
+          linebuf[off + 1] = (uint8_t)(color & 0xff);
+        }
+
+      /* Send this line (320 bytes) — CS stays low across all lines */
+
+      if (lcd_hw_spi_usable())
+        {
+          if (lcd_spi_write(linebuf, sizeof(linebuf), NULL) != 0)
+            {
+              goto pat_bb_fallback;
+            }
+        }
+      else
+        {
+          /* Bit-bang path */
+
+          int i;
+
+          for (i = 0; i < (int)sizeof(linebuf); i++)
+            {
+              spi_write_byte(linebuf[i]);
+            }
+        }
+
+      total_bytes += sizeof(linebuf);
+    }
+
+  /* Deassert CS + display on */
+
+  gpio_write_fast(&g_cache_cs, 1);
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  if (g_pins_in_spi_mode)
+    {
+      lcd_spi_pins_to_gpio();
+    }
+#endif
+
+  lcd_send_cmd(0x29);  /* display on */
+
+  syslog(LOG_INFO,
+         "[pat] %s: done — sent %zu bytes (expected %d)\n",
+         label, total_bytes, LCD_WIDTH * LCD_HEIGHT * 2);
+
+  if (total_bytes != (size_t)(LCD_WIDTH * LCD_HEIGHT * 2))
+    {
+      syslog(LOG_ERR,
+             "[pat] %s: BYTE COUNT MISMATCH! sent=%zu expected=%d\n",
+             label, total_bytes, LCD_WIDTH * LCD_HEIGHT * 2);
+    }
+
+  return 0;
+
+pat_bb_fallback:
+  /* HW SPI failed mid-frame — finish with bit-bang */
+
+  {
+    int y2;
+    int i;
+
+    for (y2 = y + 1; y2 < LCD_HEIGHT; y2++)
+      {
+        /* Regenerate line (we need to, linebuf was for line y) */
+
+        for (x = 0; x < LCD_WIDTH; x++)
+          {
+            uint16_t color;
+            int off = x * 2;
+
+            if ((x & 1) == 0)
+              {
+                color = 0xffff;
+              }
+            else
+              {
+                color = 0x0000;
+              }
+
+            if (y2 == 80)
+              {
+                color = 0xffff;
+              }
+
+            if (y2 == 0 || y2 == LCD_HEIGHT - 1 ||
+                x == 0 || x == LCD_WIDTH - 1)
+              {
+                color = 0xf800;
+              }
+
+            if (y2 < 8 && x < 8)
+              {
+                color = 0x07e0;
+              }
+            else if (y2 < 8 && x >= LCD_WIDTH - 8)
+              {
+                color = 0x001f;
+              }
+            else if (y2 >= LCD_HEIGHT - 8 && x < 8)
+              {
+                color = 0xffe0;
+              }
+            else if (y2 >= LCD_HEIGHT - 8 && x >= LCD_WIDTH - 8)
+              {
+                color = 0xf81f;
+              }
+
+            linebuf[off]     = (uint8_t)(color >> 8);
+            linebuf[off + 1] = (uint8_t)(color & 0xff);
+          }
+
+        for (i = 0; i < (int)sizeof(linebuf); i++)
+          {
+            spi_write_byte(linebuf[i]);
+          }
+
+        total_bytes += sizeof(linebuf);
+      }
+  }
+
+  gpio_write_fast(&g_cache_cs, 1);
+  lcd_spi_pins_to_gpio();
+  lcd_send_cmd(0x29);
+
+  syslog(LOG_INFO,
+         "[pat] %s: HW SPI failed, finished with bit-bang — "
+         "sent %zu bytes\n",
+         label, total_bytes);
+  return 0;
+}
+
+static int lcdtest_pat(int argc, char *argv[])
+{
+  const char *target = "both";
+
+  if (argc > 2)
+    {
+      target = argv[2];
+    }
+
+  if (strcmp(target, "left") == 0 || strcmp(target, "both") == 0)
+    {
+      lcdtest_pat_draw(&g_lcd_left, "LEFT");
+    }
+
+  if (strcmp(target, "right") == 0 || strcmp(target, "both") == 0)
+    {
+      lcdtest_pat_draw(&g_lcd_right, "RIGHT");
+    }
+
+  if (strcmp(target, "left") != 0 &&
+      strcmp(target, "right") != 0 &&
+      strcmp(target, "both") != 0)
+    {
+      syslog(LOG_ERR, "[pat] usage: lcdtest pat [left|right|both]\n");
+      return -EINVAL;
+    }
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: lcdtest_one
+ *
+ * Description:
+ *   Isolation test for a single panel.  Powers on LDO, initializes one
+ *   screen, fills it with solid red, and prints pin diagnostics.
+ *   Usage: lcdtest one left | lcdtest one right
+ *
+ ****************************************************************************/
+
+static int lcdtest_one(int argc, char *argv[])
+{
+  const lcd_pins_t *pins;
+  const char *label;
+
+  if (argc < 3)
+    {
+      syslog(LOG_ERR, "[one] usage: lcdtest one left|right\n");
+      return -EINVAL;
+    }
+
+  if (strcmp(argv[2], "left") == 0)
+    {
+      pins = &g_lcd_left;
+      label = "LEFT";
+    }
+  else if (strcmp(argv[2], "right") == 0)
+    {
+      pins = &g_lcd_right;
+      label = "RIGHT";
+    }
+  else
+    {
+      syslog(LOG_ERR, "[one] unknown panel: %s\n", argv[2]);
+      return -EINVAL;
+    }
+
+  /* Step 1: LDO + backlight */
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);
+  syslog(LOG_INFO, "[one] %s: LDO_3V3 ON (P%d)\n", label, LCD_PIN_LDO33_EN);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+  syslog(LOG_INFO, "[one] %s: backlight ON (P%d)\n", label, LCD_PIN_BL);
+
+  /* Step 2: pin setup + reset */
+
+  lcd_setup_pins(pins);
+  syslog(LOG_INFO, "[one] %s: setup_pins done "
+         "(SCLK=P%d CS=P%d MOSI=P%d DC=P%d RST=P%d)\n",
+         label, pins->sclk, pins->cs, pins->mosi, pins->dc, pins->rst);
+
+  gpio_write(pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(pins->rst, 1);
+  up_mdelay(120);
+  syslog(LOG_INFO, "[one] %s: RST pulse done (0→15ms→1→120ms)\n", label);
+
+  /* Step 3: init sequence (no display-on) */
+
+  lcd_init_sequence(false);
+  syslog(LOG_INFO, "[one] %s: init_sequence done\n", label);
+
+  /* Print SPI path used */
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  if (pins == &g_lcd_left && g_hw_spi_capable)
+    {
+      syslog(LOG_INFO, "[one] %s: data path = HW SPI1\n", label);
+    }
+  else
+#endif
+    {
+      syslog(LOG_INFO, "[one] %s: data path = bit-bang\n", label);
+    }
+
+  /* Step 4: fill entire screen red.
+   * Use lcd_fill_rect which correctly holds CS low across the entire
+   * RAMWR transfer.  The previous manual loop called lcd_send_data()
+   * per 256-pixel chunk, and each call raised CS — terminating the
+   * RAMWR prematurely so only the first chunk landed.
+   */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0xf800);
+  syslog(LOG_INFO, "[one] %s: filled %d px RED (0xF800)\n",
+         label, LCD_WIDTH * LCD_HEIGHT);
+
+  /* Step 5: display on */
+
+  lcd_send_cmd(0x29);  /* display on */
+  syslog(LOG_INFO, "[one] %s: display ON (0x29)\n", label);
+
+  /* Step 6: dump GPIO CFG for all 5 pins */
+
+  syslog(LOG_INFO,
+         "[one] %s: GPIO CFG dump:\n"
+         "[one]   P%d(SCLK) cfg=0x%05lX  P%d(CS)  cfg=0x%05lX\n"
+         "[one]   P%d(MOSI) cfg=0x%05lX  P%d(DC)  cfg=0x%05lX\n"
+         "[one]   P%d(RST)  cfg=0x%05lX\n",
+         label,
+         pins->sclk, (unsigned long)getreg32(BK7258_GPIO_CFG(pins->sclk)),
+         pins->cs,   (unsigned long)getreg32(BK7258_GPIO_CFG(pins->cs)),
+         pins->mosi, (unsigned long)getreg32(BK7258_GPIO_CFG(pins->mosi)),
+         pins->dc,   (unsigned long)getreg32(BK7258_GPIO_CFG(pins->dc)),
+         pins->rst,  (unsigned long)getreg32(BK7258_GPIO_CFG(pins->rst)));
+
+  syslog(LOG_INFO, "[one] %s: done — screen should be solid RED\n", label);
+  return 0;
+}
+
+/****************************************************************************
+ * Name: lcdtest_chunk
+ *
+ * Description:
+ *   Probe SPI chunk sizes with full LCD power-on and init.
+ *   Usage: lcdtest chunk <bytes> [sram|psram] [one|multi]
+ *
+ *   bytes   — chunk size in bytes (2..4095, even only, default 1024)
+ *   sram    — source buffer in SRAM static array (default)
+ *   psram   — source buffer in PSRAM at 0x60200000
+ *   one     — one lcd_spi_write per chunk_bytes, loop until screen full (default)
+ *   multi   — one lcd_spi_write for entire 51200-byte frame, SPI chunks internally
+ *
+ *   Four combinations isolate (a) PSRAM vs SRAM source and
+ *   (b) single-chunk vs multi-chunk SPI path.
+ *
+ ****************************************************************************/
+
+/* PSRAM test buffer address — past camera buffers (0x60000000–0x601C2000) */
+
+#define CHUNK_PSRAM_TEST_ADDR  0x60200000u
+
+static int lcdtest_chunk(int argc, char *argv[])
+{
+  static uint8_t sram_tile[4096];
+  int chunk_bytes = SPI_MAX_CHUNK_BYTES;
+  int total = 160 * 160 * 2;  /* full screen RGB565 */
+  uint32_t saved_max = g_spi_max_chunk;
+  const uint8_t *src;
+  uint8_t *psram_buf = NULL;
+  bool use_psram = false;
+  bool use_multi = false;
+  size_t sent = 0;
+  int ret;
+  int i;
+  clock_t t0;
+  uint32_t elapsed_ms;
+  uint32_t throughput_kbps;
+
+  /* Parse arguments */
+
+  if (argc > 2)
+    {
+      chunk_bytes = atoi(argv[2]);
+    }
+
+  for (i = 3; i < argc; i++)
+    {
+      if (strcmp(argv[i], "psram") == 0)
+        {
+          use_psram = true;
+        }
+      else if (strcmp(argv[i], "sram") == 0)
+        {
+          use_psram = false;
+        }
+      else if (strcmp(argv[i], "multi") == 0)
+        {
+          use_multi = true;
+        }
+      else if (strcmp(argv[i], "one") == 0)
+        {
+          use_multi = false;
+        }
+      else
+        {
+          syslog(LOG_ERR,
+                 "[chunk] unknown option: %s\n"
+                 "  usage: lcdtest chunk <bytes> [sram|psram] [one|multi]\n",
+                 argv[i]);
+          return -EINVAL;
+        }
+    }
+
+  /* Validate chunk_bytes: 2..4095, even (RGB565 = 2 bytes/pixel) */
+
+  if (chunk_bytes < 2 || chunk_bytes > 4095)
+    {
+      syslog(LOG_ERR,
+             "[chunk] error: chunk_bytes=%d out of range (2..4095)\n",
+             chunk_bytes);
+      return -EINVAL;
+    }
+
+  if (chunk_bytes & 1)
+    {
+      syslog(LOG_ERR,
+             "[chunk] error: chunk_bytes=%d must be even "
+             "(RGB565 = 2 bytes/pixel)\n",
+             chunk_bytes);
+      return -EINVAL;
+    }
+
+  /* Full power-on + init sequence (same as lcdtest_go steps 1-5).
+   * Must run BEFORE lcd_hw_spi_usable() — g_hw_spi_capable is set
+   * inside lcd_setup_pins() → lcd_spi_init(), so checking it before
+   * init always returns false on cold boot.
+   */
+
+  syslog(LOG_INFO,
+         "[chunk] init: LDO_3V3 P52 ON, backlight P25 ON\n");
+
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+  up_mdelay(50);
+
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  syslog(LOG_INFO, "[chunk] init: SPI pins setup\n");
+  lcd_set_pins(&g_lcd_left);
+  lcd_setup_pins(&g_lcd_left);
+
+  syslog(LOG_INFO, "[chunk] init: RST pulse + lcd_init_sequence\n");
+  gpio_write(g_active_pins->rst, 0);
+  up_mdelay(15);
+  gpio_write(g_active_pins->rst, 1);
+  up_mdelay(120);
+  lcd_init_sequence(true);
+
+  /* HW SPI gate — checked AFTER init (g_hw_spi_capable is now set) */
+
+  syslog(LOG_INFO,
+         "[chunk] hw_spi_usable=%d\n",
+         (int)lcd_hw_spi_usable());
+
+  if (!lcd_hw_spi_usable())
+    {
+      syslog(LOG_ERR,
+             "[chunk] error: HW SPI not usable after init, cannot test\n");
+      return -ENODEV;
+    }
+
+  syslog(LOG_INFO,
+         "[chunk] init done. params: chunk_bytes=%d src=%s mode=%s\n",
+         chunk_bytes,
+         use_psram ? "psram" : "sram",
+         use_multi ? "multi" : "one");
+
+  /* Prepare source buffer */
+
+  if (use_psram)
+    {
+      ret = bk7258_psram_init();
+      if (ret < 0)
+        {
+          syslog(LOG_ERR,
+                 "[chunk] PSRAM init failed: %d\n", ret);
+          return ret;
+        }
+
+      psram_buf = (uint8_t *)CHUNK_PSRAM_TEST_ADDR;
+      src = psram_buf;
+
+      /* Fill PSRAM buffer with blue 0x001F */
+
+      for (i = 0; i < total; i += 2)
+        {
+          psram_buf[i]     = 0x00;
+          psram_buf[i + 1] = 0x1f;
+        }
+    }
+  else
+    {
+      /* Fill SRAM tile with blue — entire tile, not just chunk_bytes */
+
+      for (i = 0; i < (int)sizeof(sram_tile); i += 2)
+        {
+          sram_tile[i]     = 0x00;
+          sram_tile[i + 1] = 0x1f;
+        }
+
+      src = sram_tile;
+    }
+
+  /* CASET + RASET for full screen */
+
+  {
+    uint8_t ca[4] = {0, 0, 0, 159};
+    uint8_t ra[4] = {0, 0, 0, 159};
+
+    lcd_send_cmd_data(0x2a, ca, 4);
+    lcd_send_cmd_data(0x2b, ra, 4);
+  }
+
+  /* Override runtime chunk limit for this test */
+
+  g_spi_max_chunk = (uint32_t)chunk_bytes;
+
+  /* RAMWR — single CS-low session */
+
+  lcd_send_cmd(0x2c);
+  gpio_write_fast(&g_cache_dc, 1);
+  gpio_write_fast(&g_cache_cs, 0);
+  lcd_spi_pins_to_spi();
+
+  t0 = clock_systime_ticks();
+
+  if (use_multi)
+    {
+      /* MULTI: one lcd_spi_write for the entire frame.
+       * If src is SRAM tile (4096 bytes), lcd_spi_write will reuse
+       * the same buffer for each internal chunk — this is fine because
+       * we're sending constant blue.  For PSRAM, the full 51200-byte
+       * buffer is contiguous.
+       */
+
+      if (!use_psram)
+        {
+          /* SRAM tile is only 4096 bytes but we need to send 51200.
+           * lcd_spi_write reads from the pointer as it chunks, so
+           * we need a full-size SRAM buffer.  Use a second static.
+           */
+
+          static uint8_t sram_full[51200];
+
+          for (i = 0; i < (int)sizeof(sram_full); i += 2)
+            {
+              sram_full[i]     = 0x00;
+              sram_full[i + 1] = 0x1f;
+            }
+
+          src = sram_full;
+        }
+
+      sent = 0;
+      ret = lcd_spi_write(src, (size_t)total, &sent);
+    }
+  else
+    {
+      /* ONE: loop lcd_spi_write with chunk_bytes-sized batches */
+
+      int remaining = total;
+
+      ret = 0;
+
+      while (remaining > 0)
+        {
+          int batch = remaining;
+
+          if (batch > chunk_bytes)
+            {
+              batch = chunk_bytes;
+            }
+
+          sent = 0;
+          ret = lcd_spi_write(src, (size_t)batch, &sent);
+
+          if (ret != 0)
+            {
+              break;
+            }
+
+          remaining -= batch;
+        }
+    }
+
+  elapsed_ms = (uint32_t)TICK2MSEC(clock_systime_ticks() - t0);
+  lcd_spi_pins_to_gpio();
+  gpio_write_fast(&g_cache_cs, 1);
+  g_spi_max_chunk = saved_max;
+
+  if (ret != 0)
+    {
+      syslog(LOG_ERR,
+             "[chunk] FAIL: chunk_bytes=%d src=%s mode=%s "
+             "sent=%lu/%d elapsed=%lums\n",
+             chunk_bytes,
+             use_psram ? "psram" : "sram",
+             use_multi ? "multi" : "one",
+             (unsigned long)sent, total,
+             (unsigned long)elapsed_ms);
+      return ret;
+    }
+
+  /* Avoid division by zero */
+
+  if (elapsed_ms == 0)
+    {
+      elapsed_ms = 1;
+    }
+
+  throughput_kbps = (uint32_t)total * 1000u / elapsed_ms / 1024u;
+
+  syslog(LOG_INFO,
+         "[chunk] PASS: chunk_bytes=%d src=%s mode=%s "
+         "filled %d bytes elapsed=%lums throughput=%lu KB/s\n",
+         chunk_bytes,
+         use_psram ? "psram" : "sram",
+         use_multi ? "multi" : "one",
+         total,
+         (unsigned long)elapsed_ms,
+         (unsigned long)throughput_kbps);
+  return 0;
+}
+
+/****************************************************************************
+ * Name: lcdtest_clk
+ *
+ * Description:
+ *   Set SPI1 clock divider at runtime.  Actual SPI clock = 26/(div+1) MHz.
+ *   Re-writes the CTRL register's clk_rate field and readback-verifies.
+ *   Range: 0..255.
+ *
+ * Usage: lcdtest clk <div>
+ *
+ ****************************************************************************/
+
+static int lcdtest_clk(int argc, char *argv[])
+{
+  uint32_t div;
+  uint32_t ctrl;
+  uint32_t readback;
+  int mhz_int;
+  int mhz_frac;
+
+  if (argc < 3)
+    {
+      syslog(LOG_INFO,
+             "[clk] current: div=%lu (~%d.%d MHz)\n",
+             (unsigned long)g_spi_clk_div,
+             26 / (int)(g_spi_clk_div + 1),
+             (26 * 10 / (int)(g_spi_clk_div + 1)) % 10);
+      syslog(LOG_INFO, "[clk] usage: lcdtest clk <div>  (0..255)\n");
+      return 0;
+    }
+
+  div = (uint32_t)atoi(argv[2]);
+  if (div > 255)
+    {
+      div = 255;
+    }
+
+  g_spi_clk_div = div;
+
+  /* Re-write CTRL register with new clk_rate */
+
+  ctrl = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+  ctrl &= ~(0xFFu << SPI_CTRL_CLK_RATE_SHIFT);  /* clear old clk_rate */
+  ctrl |= (div << SPI_CTRL_CLK_RATE_SHIFT);      /* set new clk_rate */
+  putreg32(ctrl, SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  /* Readback verify */
+
+  readback = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  mhz_int  = 26 / (int)(div + 1);
+  mhz_frac = (26 * 10 / (int)(div + 1)) % 10;
+
+  syslog(LOG_INFO,
+         "[clk] set div=%lu → ~%d.%d MHz, "
+         "CTRL wrote=0x%08lX read=0x%08lX\n",
+         (unsigned long)div, mhz_int, mhz_frac,
+         (unsigned long)ctrl, (unsigned long)readback);
+
+  if (((readback >> SPI_CTRL_CLK_RATE_SHIFT) & 0xFF) != div)
+    {
+      syslog(LOG_ERR,
+             "[clk] WARNING: clk_rate readback mismatch "
+             "(wrote %lu, read %lu)\n",
+             (unsigned long)div,
+             (unsigned long)((readback >> SPI_CTRL_CLK_RATE_SHIFT) & 0xFF));
+    }
+
+  /* Also report tx_fifo_int_level (CTRL bits[1:0]) for reference */
+
+  syslog(LOG_INFO,
+         "[clk] tx_fifo_int_level=%lu  (burst=%lu)\n",
+         (unsigned long)((readback >> SPI_CTRL_TX_FIFO_INT_LVL_SHIFT) &
+                          SPI_CTRL_TX_FIFO_INT_LVL_MASK),
+         (unsigned long)g_spi_burst);
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: lcdtest_burst
+ *
+ * Description:
+ *   Set SPI FIFO burst write count at runtime.
+ *   Accepted values: 1, 16, 32.  (48 is NOT offered — see below.)
+ *
+ *   burst=1: per-byte tx_fifo_wr_ready polling (safe, 67 KB/s).
+ *   burst=16/32: tx_fifo_int level polling, then batch write (416 KB/s).
+ *
+ *   Updates CTRL bits[1:0] (tx_fifo_int_level) and bit6 (tx_fifo_int_en)
+ *   at runtime.  Readback verifies the write.
+ *
+ *   FIFO depth is 64.  tx_fifo_int_level is an *occupancy* threshold:
+ *   interrupt fires when FIFO occupancy <= level, i.e. empty >= 64 - level.
+ *   Safe write count = 64 - level.  burst=48 requires level=3 (empty >= 16),
+ *   but writes 48 bytes → overflow.  Not offered.
+ *
+ * Usage: lcdtest burst <1|16|32>
+ *
+ ****************************************************************************/
+
+static int lcdtest_burst(int argc, char *argv[])
+{
+  uint32_t n;
+  uint32_t level;
+  uint32_t ctrl;
+
+  if (argc < 3)
+    {
+      const char *mode = (g_spi_burst <= 1) ? "per-byte tx_fifo_wr_ready" :
+                          "tx_fifo_int level polling";
+      uint32_t safe = SPI_FIFO_DEPTH -
+                       fifo_level_to_bytes(burst_to_fifo_level(g_spi_burst));
+
+      syslog(LOG_INFO,
+             "[burst] current: %lu  (%s, safe_write=%lu)\n",
+             (unsigned long)g_spi_burst, mode, (unsigned long)safe);
+      syslog(LOG_INFO,
+             "[burst] usage: lcdtest burst <1|16|32>\n");
+      syslog(LOG_INFO,
+             "[burst]    1  = per-byte polling (safe, 67 KB/s)\n");
+      syslog(LOG_INFO,
+             "[burst]   16  = tx_fifo_int level 1, write 16/poll "
+             "(416 KB/s, safe_write=48)\n");
+      syslog(LOG_INFO,
+             "[burst]   32  = tx_fifo_int level 2, write 32/poll "
+             "(416 KB/s, safe_write=32, default)\n");
+      syslog(LOG_INFO,
+             "[burst]  NOT 48 — level=3 only guarantees 16 empty slots, "
+             "writing 48 overflows\n");
+      return 0;
+    }
+
+  n = (uint32_t)atoi(argv[2]);
+
+  /* Accept only 1, 16, 32.  48 is intentionally rejected. */
+
+  if (n != 1 && n != 16 && n != 32)
+    {
+      syslog(LOG_ERR,
+             "[burst] invalid %lu.  Accepted: 1, 16, 32.  "
+             "48 overflows (FIFO_DEPTH=64, level=3 → safe=16).\n",
+             (unsigned long)n);
+      return -EINVAL;
+    }
+
+  g_spi_burst = n;
+
+  /* Update CTRL tx_fifo_int_level (bits[1:0]) and tx_fifo_int_en (bit6) */
+
+  level = burst_to_fifo_level(n);
+
+  ctrl = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+  ctrl &= ~(SPI_CTRL_TX_FIFO_INT_LVL_MASK << SPI_CTRL_TX_FIFO_INT_LVL_SHIFT);
+  ctrl &= ~(1u << 6);  /* clear tx_fifo_int_en */
+
+  if (n > 1)
+    {
+      ctrl |= (level << SPI_CTRL_TX_FIFO_INT_LVL_SHIFT);
+      ctrl |= (1u << 6);  /* tx_fifo_int_en */
+    }
+
+  putreg32(ctrl, SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  /* Readback verify */
+
+  uint32_t readback = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+  uint32_t rb_level = (readback >> SPI_CTRL_TX_FIFO_INT_LVL_SHIFT) &
+                       SPI_CTRL_TX_FIFO_INT_LVL_MASK;
+  uint32_t rb_int_en = (readback >> 6) & 1;
+
+  syslog(LOG_INFO,
+         "[burst] set to %lu  level=%lu  safe_write=%lu  "
+         "CTRL=0x%08lx  readback level=%lu int_en=%lu %s\n",
+         (unsigned long)n,
+         (unsigned long)level,
+         (unsigned long)(SPI_FIFO_DEPTH - fifo_level_to_bytes(level)),
+         (unsigned long)readback,
+         (unsigned long)rb_level,
+         (unsigned long)rb_int_en,
+         (rb_level == level && rb_int_en == (n > 1 ? 1u : 0u)) ?
+           "OK" : "MISMATCH!");
+
+  return 0;
+}
 
 int bk7258_lcdtest_main(int argc, char *argv[])
 {
@@ -3700,6 +4993,38 @@ int bk7258_lcdtest_main(int argc, char *argv[])
     {
       return bk7258_mic_main(argc - 1, &argv[1]);
     }
+
+  if (argc > 1 && strcmp(argv[1], "one") == 0)
+    {
+      return lcdtest_one(argc, argv);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "pat") == 0)
+    {
+      return lcdtest_pat(argc, argv);
+    }
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  if (argc > 1 && strcmp(argv[1], "spidiag") == 0)
+    {
+      return lcd_spidiag();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "chunk") == 0)
+    {
+      return lcdtest_chunk(argc, argv);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "clk") == 0)
+    {
+      return lcdtest_clk(argc, argv);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "burst") == 0)
+    {
+      return lcdtest_burst(argc, argv);
+    }
+#endif
 
   return lcdtest_stages();
 }

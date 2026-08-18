@@ -311,7 +311,8 @@ static volatile int      g_busy_buf        = -1;
 
 extern int  bk7258_lcd_preview_init(void);
 extern void bk7258_lcd_preview_deinit(void);
-extern void bk7258_lcd_blit_rgb565(uint16_t x0, uint16_t y0,
+extern void bk7258_lcd_blit_rgb565(int panel,
+                                    uint16_t x0, uint16_t y0,
                                     uint16_t w, uint16_t h,
                                     const uint8_t *rgb565);
 
@@ -3487,7 +3488,7 @@ int bk7258_camera_preview(int n_frames)
                             CAMERA_HRES, CAMERA_VRES,
                             PREVIEW_W, PREVIEW_H);
 
-      bk7258_lcd_blit_rgb565(0, 0, PREVIEW_W, PREVIEW_H,
+      bk7258_lcd_blit_rgb565(0, 0, 0, PREVIEW_W, PREVIEW_H,
                               (const uint8_t *)preview_buf);
 
       t_end = now;
@@ -3844,7 +3845,7 @@ int bk7258_camera_testpat(void)
       return ret;
     }
 
-  bk7258_lcd_blit_rgb565(0, 0, PREVIEW_W, PREVIEW_H, (const uint8_t *)buf);
+  bk7258_lcd_blit_rgb565(0, 0, 0, PREVIEW_W, PREVIEW_H, (const uint8_t *)buf);
 
   syslog(LOG_INFO,
          "[camera] testpat: 8 color bars blitted to LCD (160x160)\n");
