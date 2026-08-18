@@ -5028,3 +5028,171 @@ int bk7258_lcdtest_main(int argc, char *argv[])
 
   return lcdtest_stages();
 }
+
+/****************************************************************************
+ * DEBUG_JOURNAL — LCD/SPI Performance & Hardware Notes
+ ****************************************************************************
+ *
+ * ========================================================================
+ * SPI Performance Measurements (final, 2026-08-15)
+ * ========================================================================
+ *
+ * Full-screen 160×160 = 51200 bytes.
+ * Command: lcdtest chunk 4094 sram multi
+ *
+ *   SPI Clock   Burst   Time     Throughput   Notes
+ *   ─────────   ─────   ──────   ──────────   ─────────────────────────
+ *   2.0 MHz     1       740 ms    67 KB/s     per-byte polling (old default)
+ *   6.5 MHz     1       390 ms   128 KB/s     per-byte polling
+ *   6.5 MHz     16      120 ms   416 KB/s     tx_fifo_int level 1
+ *   6.5 MHz     32      120 ms   416 KB/s     tx_fifo_int level 2
+ *   6.5 MHz     48      FAIL     —            FIFO overflow (see below)
+ *   13  MHz     32       50 ms  1000 KB/s     ← FINAL DEFAULT
+ *   26  MHz     32       50 ms  1000 KB/s     no further gain
+ *
+ * Total speedup: 740ms → 50ms ≈ 15×.
+ * 26 MHz offers no gain — polling-loop ceiling reached.
+ * Timer resolution is 10ms; 50ms actual range is 45-55ms.
+ * 1px vertical pattern (lcdtest pat) clean at both 13 and 26 MHz.
+ * 13 MHz chosen to preserve timing margin.
+ *
+ * Final defaults (Kconfig + defconfig):
+ *   CONFIG_LCD_GC9D01_SPI_CLK_DIV       = 1   (13 MHz)
+ *   CONFIG_LCD_GC9D01_SPI_BURST         = 32
+ *   CONFIG_LCD_GC9D01_SPI_BYTE_INTERVAL = 0
+ *
+ * ========================================================================
+ * FIFO Depth: 64, NOT 48
+ * ========================================================================
+ *
+ * SPI_FIFO_DEPTH was originally set to 48, copied from ARMino's
+ * SPI_FIFO_INT_LEVEL_48 enum.  That enum defines interrupt *thresholds*,
+ * not FIFO capacity.  ARMino's spi_ll.h says "≥48 bytes" — consistent
+ * with 64, but was read as "exactly 48".
+ *
+ * Empirical proof (the ONLY model that explains all three burst levels):
+ *
+ *   tx_fifo_int_level is an OCCUPANCY threshold:
+ *     interrupt fires when FIFO_occupancy <= level
+ *     → empty_slots >= FIFO_DEPTH - level
+ *
+ *   Safe write count = FIFO_DEPTH - level:
+ *     level=16 → empty >= 48, write 16 → safe ✓
+ *     level=32 → empty >= 32, write 32 → safe ✓ (exact fit)
+ *     level=48 → empty >= 16, write 48 → overflow by 32 bytes ✗
+ *
+ *   Only FIFO_DEPTH=64 makes all three observations consistent.
+ *
+ * ========================================================================
+ * Camera Preview Performance (post-fix, ~7 fps)
+ * ========================================================================
+ *
+ * camera preview 30 left: ~127.6 ms/frame → ~7 fps
+ *   blit               ~50 ms   (SPI transfer)
+ *   downsample+convert ~78 ms   ← NEW BOTTLENECK
+ *
+ * Root cause: uyvy_to_rgb565_scaled() reads 3 PSRAM bytes per output
+ * pixel (p[0]/p[1]/p[2]).  For 160×160 output = 25600 pixels → ~76800
+ * scattered PSRAM reads.  PSRAM uses QSPI; scattered reads have much
+ * higher per-access overhead than sequential burst reads.
+ *
+ * 🟡 Candidate optimizations (NOT implemented, low priority):
+ *
+ *   a) SRAM staging: memcpy source scanlines to SRAM before sampling.
+ *      Converts scattered PSRAM reads into sequential burst reads.
+ *      Trade-off: extra SRAM copy, but SRAM is ~10× faster for random
+ *      access.
+ *
+ *   b) DVP hardware crop: configure DVP to capture only 160×160 region.
+ *      Conversion becomes 1:1 (no downsampling), eliminating the
+ *      scattered-read pattern entirely.
+ *
+ *   NOT implementing now because:
+ *     - Full-screen preview is a demo, not the production path.
+ *     - Production path: camera → PSRAM face detect → direction →
+ *       screen draws eyes (partial refresh only).
+ *     - A 60×60 iris region = 7200 bytes.  At 1000 KB/s → ~7ms blit.
+ *       More than sufficient for smooth eye animation.
+ *
+ * ========================================================================
+ * Hardware Behavior Gotchas (HIGH RISK — repeated pitfall source)
+ * ========================================================================
+ *
+ * a) SPI trans_len latches on tx_en RISING EDGE (0→1).
+ *    Multi-chunk transfer: each chunk must clear tx_en first, then set
+ *    it.  Writing trans_len+tx_en=1 in the same store has no rising edge
+ *    for the second chunk → FIFO stalls at ~70 bytes, INT_STATUS=0x00000000.
+ *
+ * b) CFG (REG_0x05) MUST be read-modify-write.
+ *    Blank overwrite clears tx_finish_int_en (bit2), which prevents
+ *    tx_finish (bit13) from ever asserting → apparent SPI stall.
+ *
+ * c) trans_len=1 does NOT trigger tx_finish_int.
+ *    Single-byte transfers must use bit-bang.  Workaround: LCD driver
+ *    uses LCD_GC9D01_HWSPI_MIN_LEN threshold to avoid single-byte HW SPI.
+ *
+ * d) tx_fifo_wr_ready (INT_STATUS bit1) means "≥1 empty slot", NOT
+ *    "48/64 empty slots".  Batch writes must use tx_fifo_int_level
+ *    (CTRL bits[1:0]) + tx_fifo_int (INT_STATUS bit8) as the gate.
+ *
+ * e) GC9D01: CS must stay LOW for the entire pixel transfer after 0x2C
+ *    (RAMWR).  Raising CS mid-transfer terminates the RAMWR command.
+ *
+ * f) GC2145 P0:0x84=0x02 is UYVY, NOT YUYV.
+ *    ARMino dvp_gc2145.c's "yuyv" annotation is wrong.
+ *    Actual PSRAM layout: U Y0 V Y1 (confirmed by memory dump).
+ *
+ * g) LDO33_EN=P52 alone is sufficient to power the LCD panel.
+ *    lcdtest_go's historical 26-pin blind scan was legacy; removed.
+ *
+ * h) Registers 0x44010028 / 0x44010030 are SHARED between LCD and DVP
+ *    clock configuration.  Must use read-modify-write; blank overwrite
+ *    corrupts the other subsystem's clock settings.
+ *
+ * ========================================================================
+ * Methodology Lessons
+ * ========================================================================
+ *
+ * 1. Do not use variables that don't reflect real state as guards.
+ *    This same anti-pattern caused four bugs in this sprint:
+ *
+ *    - lcd_spi_pins_to_gpio() hardcoded g_lcd_left, polluting GPIO cache
+ *    - lcdtest_chunk() used g_active_pins != &g_lcd_left as guard (static
+ *      initial value equals it → condition always false → init skipped)
+ *    - lcd_hw_spi_usable() checked before lcd_setup_pins() ran
+ *    - preview_init used lcd_set_pins to switch panel, but GPIO cache
+ *      didn't follow
+ *
+ *    Fix: g_cached_pins + lcd_set_pins() now rebuilds the cache from the
+ *    root, eliminating stale-guard bugs at the source.
+ *
+ * 2. Distinguish "level/index number" from "the physical quantity it
+ *    represents".  They are NOT interchangeable.
+ *
+ *    This sprint hit the same mistake twice:
+ *    - SPI_FIFO_DEPTH was set to 48 (the largest tx_fifo_int_level enum
+ *      value), when the actual FIFO depth is 64 bytes.
+ *    - safe_write was computed as SPI_FIFO_DEPTH - level (e.g. 64-2=62),
+ *      subtracting the level INDEX (2) instead of the level's BYTE COUNT
+ *      (32).  Correct: 64 - fifo_level_to_bytes(2) = 64 - 32 = 32.
+ *
+ *    Rule: when a register field encodes a physical quantity via a lookup
+ *    table (level→bytes, enum→frequency, code→voltage), always convert
+ *    through the table.  Never use the raw field value in arithmetic that
+ *    expects the physical quantity.
+ *
+ ****************************************************************************/
+
+/* TODO List
+ *
+ * YELLOW Split bug-fix vs debug-tool commits for upstream PR
+ *    Commit 1 (+1041 lines) and Commit 3 (+1644 lines) each bundle
+ *    "bug fix / infrastructure" with "diagnostic commands" (spidiag,
+ *    chunk, pat, still, flat, clk, burst).  If submitting to openvela
+ *    upstream, reviewers will ask to split into:
+ *      - "fix" commits: HW SPI trans_len latching, pin cache desync,
+ *        FIFO-depth correction, safe_write bug, multi-chunk transfer
+ *      - "tool" commits: lcd_spidiag, lcdtest subcommands, performance
+ *        measurement infrastructure
+ *    Low urgency -- do before upstream PR, not now.
+ */

@@ -1,0 +1,12 @@
+# Claude 逐轮诊断报告（中间产物，结论已提炼进 DEBUG_JOURNAL_zh-cn.md）
+claude_*_r*.txt
+claude_phase*_r*.txt
+
+# 构建产物
+cmake_out/
+*.bin
+*.hex
+bk_repack_work/
+
+# 注意：logs/ 是大赛提交物（AI Coding 会话日志，见 logs/README.md），
+# 必须随代码一并提交，不要加入忽略列表。
