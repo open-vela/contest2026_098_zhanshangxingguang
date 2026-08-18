@@ -150,6 +150,328 @@ static void gpio_set_output(int pin)
   cfg &= ~GPIO_CFG_INPUT_EN;     /* input off (bit2: 0=off) */
   putreg32(cfg, BK7258_GPIO_CFG(pin));
 }
+/****************************************************************************
+ * Hardware SPI1 Register Definitions (BK7258)
+ *
+ * Sources (all Apache-2.0, Beken ARMino SDK):
+ *   SPI1 base = SOC_SPI_REG_BASE(0x44870000) + 0x1010000 = 0x45880000
+ *     (reg_base.h: SOC_SPI_REG_BASE; spi_ll.h: SPI_LL_REG_BASE(1))
+ *
+ *   SYS clock enable = SOC_SYS_REG_BASE(0x44010000) + 0xC*4 = 0x44010030
+ *     SPI1 enable = bit[9]
+ *     (sys_reg.h: SYS_CPU_DEVICE_CLK_ENABLE_ADDR, SPI1_CKEN_POS=9)
+ *
+ *   GPIO func select: BK7258_SYS_BASE(0x44010000) + 0xC0 + (pin/8)*4
+ *     4 bits/pin, shift = (pin%8)*4
+ *     (bk7258_gpio.h: BK7258_SYS_GPIO_FUNC, BK7258_GPIO_FUNC_SHIFT)
+ *
+ *   SPI1 pin mapping (gpio_map.h, index 0 = AF0):
+ *     GPIO_2 = SPI1_SCK  (used for HW SPI)
+ *     GPIO_3 = SPI1_CSN  (NOT used — auto-toggle kills GC9D01)
+ *     GPIO_4 = SPI1_MOSI (used for HW SPI)
+ *
+ *   Register offsets (spi_struct.h: spi_hw_t, REG_0xN at offset N*4):
+ *     REG_0x02 global_ctrl, REG_0x04 ctrl, REG_0x05 cfg, REG_0x06 int_status,
+ *     REG_0x07 data
+ *
+ *   INT_STATUS bits (spi_struct.h):
+ *     bit[1]  tx_fifo_wr_ready   — FIFO has space
+ *     bit[13] tx_finish_int      — transfer complete
+ *     bit[16] tx_fifo_clr        — write 1 to clear TX FIFO
+ *
+ *   Clock: XTAL = 26 MHz (defconfig: CONFIG_XTAL_FREQ=26000000)
+ *     SPI_CLK_XTAL selects 26 MHz source (sys_hal.c: sys_hal_spi_select_clock)
+ *     SPI clock = 26 MHz / (clk_rate + 1); clk_rate=0 → 26 MHz
+ *
+ *   FIFO depth: 64 bytes (empirically measured, see SPI_FIFO_DEPTH below)
+ *   TX trans len: 12-bit field, max 4095 per transfer
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+
+#define BK7258_SPI1_BASE             0x45880000u
+
+/* SPI register offsets (word-indexed in spi_struct.h, *4 for byte addr) */
+
+#define SPI_REG_GLOBAL_CTRL(base)    ((base) + 0x02 * 4)
+#define SPI_REG_CTRL(base)           ((base) + 0x04 * 4)
+#define SPI_REG_CFG(base)            ((base) + 0x05 * 4)
+#define SPI_REG_INT_STATUS(base)     ((base) + 0x06 * 4)
+#define SPI_REG_DATA(base)           ((base) + 0x07 * 4)
+
+/* GLOBAL_CTRL bits */
+
+#define SPI_SOFT_RESET               (1u << 0)
+#define SPI_CLK_GATE_BYPASS          (1u << 1)
+
+/* CTRL register bits (spi_struct.h: ctrl, REG_0x04) */
+
+#define SPI_CTRL_ENABLE_BIT          (1u << 23)
+#define SPI_CTRL_MASTER_BIT          (1u << 22)
+#define SPI_CTRL_CPHA_BIT            (1u << 21)
+#define SPI_CTRL_CPOL_BIT            (1u << 20)
+#define SPI_CTRL_LSB_FIRST_BIT       (1u << 19)
+#define SPI_CTRL_BIT_WIDTH_BIT       (1u << 18)
+#define SPI_CTRL_CLK_RATE_SHIFT      8
+#define SPI_CTRL_CLK_RATE_MASK       0xffu
+#define SPI_CTRL_BYTE_INTERVAL_SHIFT 24
+#define SPI_CTRL_BYTE_INTERVAL_MASK  0x3fu
+
+/* CTRL bits[1:0] = tx_fifo_int_level: FIFO threshold for tx_fifo_int.
+ * 0 = 1 empty slot, 1 = 16, 2 = 32, 3 = 48.
+ * (ARMino hal_spi_types.h: SPI_FIFO_INT_LEVEL_1/16/32/48)
+ */
+
+#define SPI_CTRL_TX_FIFO_INT_LVL_SHIFT 0
+#define SPI_CTRL_TX_FIFO_INT_LVL_MASK  0x3u
+
+/* CFG register bits (spi_struct.h: cfg, REG_0x05) */
+
+
+#define SPI_CFG_TX_EN_BIT            (1u << 0)
+#define SPI_CFG_RX_EN_BIT            (1u << 1)
+#define SPI_CFG_TX_FINISH_INT_EN_BIT (1u << 2)
+#define SPI_CFG_RX_FINISH_INT_EN_BIT (1u << 3)
+#define SPI_CFG_TX_TRANS_LEN_SHIFT   8
+#define SPI_CFG_TX_TRANS_LEN_MASK    0xfffu
+
+/* Maximum bytes per SPI chunk.
+ * The tx_trans_len field is 12 bits (max 4095), but empirically chunk>=4095
+ * causes the controller to stall: INT_STATUS reads 0x00000000 (FIFO full,
+ * no tx_fifo_wr_ready), always stalls at sent=70/4095.  1024 is verified
+ * stable across all existing call sites.  SPI_CFG_TX_TRANS_LEN_MASK is
+ * used only for register bit-field operations, NOT as a length limit.
+ * Use "lcdtest chunk <N>" to sweep and find the true hardware ceiling.
+ */
+
+#define SPI_MAX_CHUNK_BYTES          4095
+
+/* Runtime-overridable chunk limit.  lcd_spi_write() uses this instead of
+ * the compile-time macro so that "lcdtest chunk N" can probe values above
+ * 1024.  Default = SPI_MAX_CHUNK_BYTES.  lcdtest_chunk() temporarily
+ * overrides this and always restores it on exit (including timeout paths).
+ */
+
+static uint32_t g_spi_max_chunk = SPI_MAX_CHUNK_BYTES;
+
+/* Runtime-adjustable SPI clock divider.
+ * Default = CONFIG_LCD_GC9D01_SPI_CLK_DIV (from Kconfig, default 1 = 13 MHz).
+ * "lcdtest clk <div>" sets this and re-initializes SPI1 CTRL.
+ * Actual SPI clock = 26 MHz / (div + 1).
+ * Range: 0..255 (CTRL register bits[8:15]).
+ *
+ * Measured (51200-byte blit, burst=32, BYTE_INTERVAL=0):
+ *   div=12 (2.0 MHz) → 740ms / 67 KB/s   (burst=1)
+ *   div=3  (6.5 MHz) → 120ms / 416 KB/s  (burst=32)
+ *   div=1  (13 MHz)  →  50ms / 1000 KB/s (burst=32) ← default
+ *   div=0  (26 MHz)  →  50ms / 1000 KB/s (no gain, polling ceiling)
+ */
+
+static uint32_t g_spi_clk_div = CONFIG_LCD_GC9D01_SPI_CLK_DIV;
+
+/* Runtime-adjustable SPI burst write count.
+ * Default = CONFIG_LCD_GC9D01_SPI_BURST (from Kconfig, default 32).
+ * "lcdtest burst <n>" sets this.  Accepted values: 1, 16, 32.
+ *
+ * burst=1: classic per-byte polling via tx_fifo_wr_ready (INT_STATUS bit1).
+ * burst=16/32: uses tx_fifo_int_level (CTRL bits[1:0]) to set the FIFO
+ *   interrupt threshold, then polls tx_fifo_int (INT_STATUS bit8) which
+ *   asserts when the FIFO occupancy <= level.  After the poll, writes
+ *   N bytes to the FIFO in a tight loop (no per-byte ready check).
+ *
+ * Measured (51200-byte blit, lcdtest chunk 4094 sram multi):
+ *   2.0 MHz  burst=1  →  740ms /   67 KB/s
+ *   6.5 MHz  burst=1  →  390ms /  128 KB/s
+ *   6.5 MHz  burst=16 →  120ms /  416 KB/s
+ *   6.5 MHz  burst=32 →  120ms /  416 KB/s
+ *   13  MHz  burst=32 →   50ms / 1000 KB/s  ← default combo
+ *   26  MHz  burst=32 →   50ms / 1000 KB/s  (no further gain)
+ *   burst=48 → FAIL (FIFO overflow, see below)
+ *
+ * The 4 hardware tx_fifo_int levels map to CTRL bits[1:0]:
+ *   level 0 → occupancy ≤ 0  (burst=1, uses bit1 polling instead)
+ *   level 1 → occupancy ≤ 16 (empty ≥ 48, safe to write 16)
+ *   level 2 → occupancy ≤ 32 (empty ≥ 32, safe to write 32)
+ *   level 3 → occupancy ≤ 48 (empty ≥ 16, safe to write only 16!)
+ *
+ * FIFO depth is 64, NOT 48.  The value 48 comes from ARMino's
+ * SPI_FIFO_INT_LEVEL_48 enum which defines interrupt *thresholds*, not
+ * capacity.  Safe write count = FIFO_DEPTH (64) - level:
+ *   level=16 → safe=48, write 16 → OK
+ *   level=32 → safe=32, write 32 → OK (exactly fits)
+ *   level=48 → safe=16, write 48 → OVERFLOW (writes 32 extra bytes)
+ *
+ * IMPORTANT: tx_fifo_int (bit8) is write-1-to-clear.  It must be cleared
+ * before each re-poll; otherwise a stale assertion causes an immediate
+ * pass and the FIFO overflows.
+ */
+
+#ifdef CONFIG_LCD_GC9D01_SPI_BURST
+static uint32_t g_spi_burst = CONFIG_LCD_GC9D01_SPI_BURST;
+#else
+static uint32_t g_spi_burst = 32;
+#endif
+
+/* Convert burst count (1/16/32) to CTRL tx_fifo_int_level field (0/1/2/3).
+ * burst=1 → level 0 (not used for int polling, but valid for register).
+ * burst=48 is intentionally NOT supported: level=3 only guarantees 16
+ * empty slots (FIFO_DEPTH=64 minus level=48), but burst=48 writes 48.
+ */
+
+static uint32_t burst_to_fifo_level(uint32_t burst)
+{
+  if (burst >= 32) return 2;
+  if (burst >= 16) return 1;
+  return 0;
+}
+
+/* Convert CTRL tx_fifo_int_level register value (0/1/2/3) back to the
+ * byte count that level represents.  NOT the same as the level number!
+ *   level 0 →  1 byte  (burst=1, per-byte mode)
+ *   level 1 → 16 bytes
+ *   level 2 → 32 bytes
+ *   level 3 → 48 bytes
+ *
+ * This mapping is the inverse of the CTRL bits[1:0] encoding.
+ * Common mistake: using the level number directly as a byte count
+ * (e.g. level=2 → 2 bytes instead of 32).  See DEBUG_JOURNAL §5.
+ */
+
+static uint32_t fifo_level_to_bytes(uint32_t level)
+{
+  switch (level)
+    {
+      case 0:  return 1;
+      case 1:  return 16;
+      case 2:  return 32;
+      case 3:  return 48;
+      default: return 1;
+    }
+}
+
+/* INT_STATUS bits (spi_struct.h: int_status, REG_0x06) */
+
+#define SPI_INT_TX_FIFO_WR_READY     (1u << 1)
+#define SPI_INT_TX_FIFO_INT          (1u << 8)
+#define SPI_INT_TX_UNDERFLOW         (1u << 11)
+#define SPI_INT_TX_FINISH            (1u << 13)
+#define SPI_INT_TX_FIFO_CLR          (1u << 16)
+#define SPI_INT_RX_FIFO_CLR          (1u << 17)
+
+/* System clock enable register for SPI1 */
+
+#define BK7258_SYS_CLK_ENABLE_REG    (BK7258_SYS_BASE + 0x0c * 4)
+#define SPI1_CLK_ENABLE_BIT          (1u << 9)
+
+/* SPI clock source select register (ARMino: sys_hal_spi_select_clock).
+ * Register: SYS_REG_0x0A at SYS_BASE + 0x0a * 4 = 0x44010028.
+ *   bit4 = clksel_spi0 (0 = XTAL 26 MHz, 1 = APLL)
+ *   bit5 = clksel_spi1 (0 = XTAL 26 MHz, 1 = APLL)
+ */
+
+#define BK7258_SYS_CLK_DIV_REG       (BK7258_SYS_BASE + 0x0a * 4)
+#define SPI1_CLKSEL_BIT              (1u << 5)
+
+/* SPI clock: XTAL 26 MHz / (clk_rate + 1).
+ * CONFIG_LCD_GC9D01_SPI_CLK_DIV sets the clk_rate field (0-255).
+ * Default=12 → 26/(12+1) = 2 MHz (conservative for bring-up).
+ */
+
+#define SPI1_CLK_RATE  CONFIG_LCD_GC9D01_SPI_CLK_DIV
+
+/* SPI FIFO depth (bytes).
+ *
+ * IMPORTANT: The FIFO is 64 bytes deep, NOT 48.
+ *
+ * The value 48 comes from ARMino's SPI_FIFO_INT_LEVEL_48 enum (the largest
+ * tx_fifo_int_level setting), which was mistakenly copied as the FIFO depth
+ * in earlier versions.  The ARMino enum defines interrupt *thresholds*, not
+ * capacity.
+ *
+ * Empirical proof (BK7258, clk_div=3 / 6.5 MHz, lcdtest chunk 4094 sram):
+ *   tx_fifo_int_level=16  → safe to write 16 bytes  (FIFO empty ≥ 48)
+ *   tx_fifo_int_level=32  → safe to write 32 bytes  (FIFO empty ≥ 32)
+ *   tx_fifo_int_level=48  → OVERFLOW at write 48     (FIFO empty only ≥ 16)
+ *
+ * This only makes sense if FIFO depth = 64:
+ *   tx_fifo_int asserts when FIFO *occupancy* ≤ level (empty ≥ 64 - level).
+ *   level=16 → empty ≥ 48, write 16 → safe
+ *   level=32 → empty ≥ 32, write 32 → safe (exactly fits)
+ *   level=48 → empty ≥ 16, write 48 → overwrites 32 bytes → corruption
+ *
+ * ARMino's FIFO depth is documented as "≥48" (spi_ll.h comment), which is
+ * consistent with 64 but was read as "exactly 48".  The actual depth is 64.
+ *
+ * Safe write count per level: safe = FIFO_DEPTH - level
+ *   level 16 → safe = 48
+ *   level 32 → safe = 32
+ *   level 48 → safe = 16  (NOT enough for burst=48, hence the failure)
+ */
+
+#define SPI_FIFO_DEPTH               64
+
+/* Tile buffer size for lcd_fill_rect() HW SPI path.
+ * Configurable via CONFIG_LCD_GC9D01_TILE_BYTES (default 1024).
+ * Must be ≤4095 (tx_trans_len 12-bit field) and even (RGB565 pixel pairs).
+ */
+
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+#  define SPI_TILE_BYTES  CONFIG_LCD_GC9D01_TILE_BYTES
+#else
+#  define SPI_TILE_BYTES  SPI_FIFO_DEPTH
+#endif
+
+/* Timeout for SPI status polling loops.
+ * Max chunk = 4095 bytes @ 2 MHz ≈ 16.4 ms.  Each poll iteration is a
+ * single getreg32 (~2-3 bus cycles @ 26 MHz CPU) ≈ 0.1 μs.
+ * 500,000 iterations ≈ 50 ms, which is ~3× the max transfer time.
+ */
+
+#define SPI_POLL_TIMEOUT             500000u
+
+/* Minimum data length to use hardware SPI.
+ * BK7258 SPI does NOT assert tx_finish_int when tx_trans_len == 1
+ * (observed empirically: all len=1 transfers timeout with
+ * INT_STATUS=0x00000003, while len>=2 always gets bit13).
+ * Panel init commands are mostly 1-byte, so routing them through HW SPI
+ * wastes ~3 ms timeout per byte.  Bit-bang is faster for short writes.
+ * Set via CONFIG_LCD_GC9D01_HWSPI_MIN_LEN (default 8).
+ */
+
+#define SPI_HWSPI_MIN_LEN  CONFIG_LCD_GC9D01_HWSPI_MIN_LEN
+
+/****************************************************************************
+ * HW SPI State
+ ****************************************************************************/
+
+static bool g_hw_spi_capable;     /* SPI1 initialized successfully */
+static bool g_pins_in_spi_mode;   /* false=GPIO, true=SPI peripheral */
+static uint32_t g_saved_sys_clk_en;
+static uint32_t g_saved_sys_clk_div;  /* SPI clock source select register */
+
+/* HW SPI1 is physically wired only to the left screen (P2=SCLK, P4=MOSI).
+ * The right screen (P22/P23/P24) has no SPI peripheral — it must always
+ * use bit-bang.  This helper prevents accidental HW SPI on the wrong panel.
+ */
+
+static inline bool lcd_hw_spi_usable(void)
+{
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+  return g_hw_spi_capable && g_active_pins == &g_lcd_left;
+#else
+  return false;
+#endif
+}
+
+/* Forward declarations — called by lcd_spi_init / lcd_spidiag before definition */
+
+static void lcd_spi_pins_to_spi(void);
+static void lcd_spi_pins_to_gpio(void);
+static void lcd_set_pins(const lcd_pins_t *pins);
+static void lcd_setup_pins(const lcd_pins_t *pins);
+
+#endif /* CONFIG_LCD_GC9D01_HW_SPI */
 
 /****************************************************************************
  * Name: gpio_write
@@ -237,6 +559,725 @@ static void lcd_setup_pins(const lcd_pins_t *pins)
   gpio_write_fast(&g_cache_sclk, 0);
   gpio_write_fast(&g_cache_mosi, 0);
 }
+#ifdef CONFIG_LCD_GC9D01_HW_SPI
+
+static void gpio_set_second_func(int pin, int func_sel)
+{
+  uint32_t cfg;
+  uintptr_t func_reg;
+  uint32_t shift;
+  uint32_t val;
+
+  cfg = getreg32(BK7258_GPIO_CFG(pin));
+  cfg |= GPIO_CFG_SECOND_FUNC;    /* second function mode (bit6=1) */
+  cfg &= ~GPIO_CFG_OUTPUT_EN;     /* ENABLE GPIO output (active-low: bit3=0=on) */
+  cfg &= ~GPIO_CFG_INPUT_EN;      /* disable input (bit2=0) */
+  cfg &= ~GPIO_CFG_PULL_EN;       /* disable pull (bit5=0) */
+
+  /* Set drive capacity to 1 for SCK pins (matches ARMino SPI_SET_PIN).
+   * GPIO capacity is bits[8:9], max=3.  SCK needs stronger drive.
+   * MOSI uses default capacity=0.
+   */
+
+  if (pin == g_lcd_left.sclk)
+    {
+      cfg &= ~(0x3u << 8);        /* clear capacity bits */
+      cfg |= (1u << 8);           /* capacity=1 for SCK */
+    }
+
+  putreg32(cfg, BK7258_GPIO_CFG(pin));
+
+  func_reg = BK7258_SYS_GPIO_FUNC(pin);
+  shift = BK7258_GPIO_FUNC_SHIFT(pin);
+  val = getreg32(func_reg);
+  val &= ~(BK7258_GPIO_FUNC_MASK << shift);
+  val |= ((uint32_t)(func_sel & BK7258_GPIO_FUNC_MASK) << shift);
+  putreg32(val, func_reg);
+}
+
+/****************************************************************************
+ * Name: lcd_spi_init
+ *
+ * Description:
+ *   Initialize BK7258 SPI1 for left-screen LCD data transfers.
+ *   Returns 0 on success, negative errno on failure.
+ *   On failure, g_hw_spi_capable stays false — caller falls back to bit-bang.
+ *
+ *   Init sequence (matching ARMino spi_id_init_common + spi_hal_init
+ *     + spi_hal_configure + spi_hal_start_common):
+ *     1. Enable SPI1 module clock, verify by read-back
+ *     2. Soft-reset (NO CLK_GATE_BYPASS — ARMino doesn't use it)
+ *     3. Configure CTRL: master, enable, mode 0, 8-bit, MSB first,
+ *        byte_interval=1, rx_sample_edge=1, interrupt enables
+ *     4. Configure CFG: TX enable, TX/RX finish int enable
+ *     5. Clear all interrupt status
+ *     6. Clear FIFOs
+ *
+ ****************************************************************************/
+
+static int lcd_spi_init(const lcd_pins_t *pins)
+{
+  uint32_t ctrl_val;
+  uint32_t cfg_val;
+  uint32_t readback;
+  uint32_t cfg2;
+  uint32_t cfg4;
+  uint32_t func2;
+  uint32_t func4;
+  uintptr_t func_reg;
+  uint32_t shift;
+
+  if (pins->sclk != 2 || pins->cs != 3 || pins->mosi != 4)
+    {
+      g_hw_spi_capable = false;
+      return -EINVAL;
+    }
+
+  /* Step 1: Enable SPI1 module clock, verify by read-back */
+
+  g_saved_sys_clk_en = getreg32(BK7258_SYS_CLK_ENABLE_REG);
+  putreg32(g_saved_sys_clk_en | SPI1_CLK_ENABLE_BIT,
+           BK7258_SYS_CLK_ENABLE_REG);
+
+  readback = getreg32(BK7258_SYS_CLK_ENABLE_REG);
+
+  if (!(readback & SPI1_CLK_ENABLE_BIT))
+    {
+      syslog(LOG_ERR,
+             "[lcd] SPI1 clock enable FAILED: wrote 0x%08lx, "
+             "read 0x%08lx\n",
+             (unsigned long)(g_saved_sys_clk_en | SPI1_CLK_ENABLE_BIT),
+             (unsigned long)readback);
+      g_hw_spi_capable = false;
+      return -EIO;
+    }
+
+  /* Step 1b: Select XTAL as SPI1 clock source.
+   * ARMino: sys_hal_spi_select_clock(SPI_ID_1, SPI_CLK_XTAL)
+   * Register 0x44010028 bit5: 0 = XTAL 26 MHz, 1 = APLL.
+   * Without this, SPI1 may have no clock source and never runs.
+   */
+
+  g_saved_sys_clk_div = getreg32(BK7258_SYS_CLK_DIV_REG);
+  putreg32(g_saved_sys_clk_div & ~SPI1_CLKSEL_BIT,
+           BK7258_SYS_CLK_DIV_REG);
+
+  /* Step 2: Soft-reset (ARMino spi_ll_init — NO CLK_GATE_BYPASS) */
+
+  putreg32(SPI_SOFT_RESET, SPI_REG_GLOBAL_CTRL(BK7258_SPI1_BASE));
+
+  /* Step 3: Configure CTRL — match ARMino spi_ll_init + spi_hal_configure
+   *
+   * spi_ll_init sets:
+   *   soft_reset → byte_interval=1 → rx_sample_edge=1 → fifo_levels=0
+   *
+   * spi_hal_configure sets:
+   *   tx_udf_int_en=1 → rx_ovf_int_en=1 → tx_fifo_int_en=0
+   *   → rx_fifo_int_en=1 → clk_rate → bit_width → bit_order
+   *   → cpol → cpha → master → wire3_en=0 → slave_release_int_en=0
+   *   → tx_finish_int_en=1 → rx_finish_int_en=1 → clear_int_status
+   *
+   * spi_hal_start_common (LAST): enable=1
+   *
+   * CTRL REG_0x04 layout (spi_struct.h):
+   *   bit[0:1]   tx_fifo_int_level   = 0
+   *   bit[2:3]   rx_fifo_int_level   = 0
+   *   bit[4]     tx_udf_int_en       = 1
+   *   bit[5]     rx_ovf_int_en       = 1
+   *   bit[6]     tx_fifo_int_en      = 0
+   *   bit[7]     rx_fifo_int_en      = 1
+   *   bit[8:15]  clk_rate            = CONFIG_LCD_GC9D01_SPI_CLK_DIV
+   *   bit[16]    slave_release_int_en= 0
+   *   bit[17]    wire3_en            = 0
+   *   bit[18]    bit_width           = 0 (8-bit)
+   *   bit[19]    lsb_first_en        = 0 (MSB first)
+   *   bit[20]    cpol                = 0
+   *   bit[21]    cpha                = 0
+   *   bit[22]    master_en           = 1
+   *   bit[23]    enable              = 1
+   *   bit[24:29] byte_interval       = 1
+   *   bit[30:31] rx_sample_edge      = 1
+   */
+
+  /* tx_fifo_int_level (CTRL bits[1:0]) and tx_fifo_int_en (bit6) are set
+   * when g_spi_burst > 1.  tx_fifo_int_en gates the tx_fifo_int status bit.
+   */
+
+  uint32_t fifo_lvl = burst_to_fifo_level(g_spi_burst);
+  uint32_t fifo_int_en = (g_spi_burst > 1) ? (1u << 6) : 0; /* tx_fifo_int_en */
+
+  ctrl_val = (1u << 4)  |   /* tx_udf_int_en */
+             (1u << 5)  |   /* rx_ovf_int_en */
+             (1u << 7)  |   /* rx_fifo_int_en */
+             fifo_int_en  |  /* tx_fifo_int_en (when burst>1) */
+             (fifo_lvl << SPI_CTRL_TX_FIFO_INT_LVL_SHIFT) |
+             (g_spi_clk_div << SPI_CTRL_CLK_RATE_SHIFT) |
+             SPI_CTRL_MASTER_BIT |
+             SPI_CTRL_ENABLE_BIT |
+             ((uint32_t)CONFIG_LCD_GC9D01_SPI_BYTE_INTERVAL
+                       << SPI_CTRL_BYTE_INTERVAL_SHIFT) |
+             (1u << 30);     /* rx_sample_edge=1 (spi_ll_set_rx_sample_edge) */
+
+  putreg32(ctrl_val, SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  /* Step 4: Configure CFG — TX enable, TX/RX finish int enable
+   * (matches spi_hal_configure: tx_en, tx_finish_int_en, rx_finish_int_en)
+   */
+
+  cfg_val = SPI_CFG_TX_EN_BIT |
+            SPI_CFG_TX_FINISH_INT_EN_BIT |
+            SPI_CFG_RX_FINISH_INT_EN_BIT;
+  putreg32(cfg_val, SPI_REG_CFG(BK7258_SPI1_BASE));
+
+  /* Step 5: Clear interrupt status (matches spi_hal_configure last step) */
+
+  putreg32(0xFFFFFFFF, SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+  /* Step 6: Clear FIFOs */
+
+  putreg32(SPI_INT_TX_FIFO_CLR | SPI_INT_RX_FIFO_CLR,
+           SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+  /* Verify CTRL was accepted + check SPI mode config */
+
+  readback = getreg32(SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  if (!(readback & SPI_CTRL_ENABLE_BIT))
+    {
+      syslog(LOG_ERR,
+             "[lcd] SPI1 CTRL enable FAILED: wrote 0x%08lx, "
+             "read 0x%08lx\n",
+             (unsigned long)ctrl_val, (unsigned long)readback);
+      g_hw_spi_capable = false;
+      return -EIO;
+    }
+
+  /* Verify SPI controller config matches GC9D01 requirements:
+   *   mode 0 (CPOL=0, CPHA=0), MSB first, 8-bit, master
+   */
+
+  if (readback & SPI_CTRL_CPHA_BIT)
+    {
+      syslog(LOG_WARNING,
+             "[lcd] WARNING: CPHA=1 (expected 0 for mode 0)\n");
+    }
+
+  if (readback & SPI_CTRL_CPOL_BIT)
+    {
+      syslog(LOG_WARNING,
+             "[lcd] WARNING: CPOL=1 (expected 0 for mode 0)\n");
+    }
+
+  if (readback & SPI_CTRL_LSB_FIRST_BIT)
+    {
+      syslog(LOG_WARNING,
+             "[lcd] WARNING: LSB first (expected MSB first)\n");
+    }
+
+  if (readback & SPI_CTRL_BIT_WIDTH_BIT)
+    {
+      syslog(LOG_WARNING,
+             "[lcd] WARNING: bit_width=1 (expected 0 for 8-bit)\n");
+    }
+
+  g_hw_spi_capable = true;
+  g_pins_in_spi_mode = false;
+
+  /* Mux readback diagnostics: print GPIO CFG and func select once.
+   * Do this here (not per-frame) to avoid syslog overhead.
+   */
+
+  lcd_spi_pins_to_spi();
+
+  cfg2 = getreg32(BK7258_GPIO_CFG(g_lcd_left.sclk));
+  cfg4 = getreg32(BK7258_GPIO_CFG(g_lcd_left.mosi));
+
+  func_reg = BK7258_SYS_GPIO_FUNC(g_lcd_left.sclk);
+  shift = BK7258_GPIO_FUNC_SHIFT(g_lcd_left.sclk);
+  func2 = (getreg32(func_reg) >> shift) & BK7258_GPIO_FUNC_MASK;
+
+  func_reg = BK7258_SYS_GPIO_FUNC(g_lcd_left.mosi);
+  shift = BK7258_GPIO_FUNC_SHIFT(g_lcd_left.mosi);
+  func4 = (getreg32(func_reg) >> shift) & BK7258_GPIO_FUNC_MASK;
+
+  /* Restore to GPIO mode — pins stay GPIO until data transfer time */
+
+  lcd_spi_pins_to_gpio();
+
+  syslog(LOG_INFO,
+         "[lcd] SPI1 init OK: clk_div=%d (~%d.%d MHz), "
+         "byte_interval=%d, CTRL=0x%08lX CFG=0x%08lX\n"
+         "[lcd]   mux: P%d cfg=0x%05lX func=%lu, "
+         "P%d cfg=0x%05lX func=%lu\n"
+         "[lcd]   mode: %s, %s, %s, enable=%d\n"
+         "[lcd]   clk: en_reg=0x%08lX div_reg=0x%08lX "
+         "(SPI1_en=%d clksel=%s)\n",
+         (int)g_spi_clk_div,
+         26 / (int)(g_spi_clk_div + 1),
+         (26 * 10 / (int)(g_spi_clk_div + 1)) % 10,
+         CONFIG_LCD_GC9D01_SPI_BYTE_INTERVAL,
+         (unsigned long)readback,
+         (unsigned long)getreg32(SPI_REG_CFG(BK7258_SPI1_BASE)),
+         g_lcd_left.sclk, (unsigned long)cfg2, (unsigned long)func2,
+         g_lcd_left.mosi, (unsigned long)cfg4, (unsigned long)func4,
+         (readback & SPI_CTRL_CPHA_BIT) ? "CPHA=1" : "CPHA=0",
+         (readback & SPI_CTRL_CPOL_BIT) ? "CPOL=1" : "CPOL=0",
+         (readback & SPI_CTRL_LSB_FIRST_BIT) ? "LSB first" : "MSB first",
+         !!(readback & SPI_CTRL_ENABLE_BIT),
+         (unsigned long)getreg32(BK7258_SYS_CLK_ENABLE_REG),
+         (unsigned long)getreg32(BK7258_SYS_CLK_DIV_REG),
+         !!(getreg32(BK7258_SYS_CLK_ENABLE_REG) & SPI1_CLK_ENABLE_BIT),
+         (getreg32(BK7258_SYS_CLK_DIV_REG) & SPI1_CLKSEL_BIT)
+           ? "APLL" : "XTAL");
+
+  return 0;
+}
+
+/****************************************************************************
+ * Name: lcd_spi_deinit
+ ****************************************************************************/
+
+static void lcd_spi_deinit(void)
+{
+  uint32_t val;
+
+  if (!g_hw_spi_capable)
+    {
+      return;
+    }
+
+  putreg32(0, SPI_REG_CTRL(BK7258_SPI1_BASE));
+
+  if (g_pins_in_spi_mode)
+    {
+      gpio_set_output_cached(g_active_pins->sclk, &g_cache_sclk);
+      gpio_set_output_cached(g_active_pins->mosi, &g_cache_mosi);
+      gpio_set_output_cached(g_active_pins->cs,   &g_cache_cs);
+      g_pins_in_spi_mode = false;
+    }
+
+  /* Restore only the SPI1-related bits in shared clock registers.
+   * 0x44010030 bit9 = SPI1 module clock enable
+   * 0x44010028 bit5 = SPI1 clock source select (CLKSEL)
+   * DVP camera also uses 0x44010028 for its own clock fields.
+   * Full-word write with the init-time snapshot would clobber DVP bits.
+   */
+
+  val = getreg32(BK7258_SYS_CLK_ENABLE_REG);
+  val &= ~SPI1_CLK_ENABLE_BIT;               /* clear SPI1 clock enable */
+  val |= (g_saved_sys_clk_en & SPI1_CLK_ENABLE_BIT);  /* restore original */
+  putreg32(val, BK7258_SYS_CLK_ENABLE_REG);
+
+  val = getreg32(BK7258_SYS_CLK_DIV_REG);
+  val &= ~SPI1_CLKSEL_BIT;                   /* clear SPI1 CLKSEL */
+  val |= (g_saved_sys_clk_div & SPI1_CLKSEL_BIT);     /* restore original */
+  putreg32(val, BK7258_SYS_CLK_DIV_REG);
+
+  g_hw_spi_capable = false;
+}
+
+/****************************************************************************
+ * Name: lcd_spi_pins_to_spi / lcd_spi_pins_to_gpio
+ *
+ * Description:
+ *   Only SCLK (P2) and MOSI (P4) are muxed to SPI1 peripheral.
+ *   CS (P3) and DC (P5) STAY as GPIO outputs — software controls them.
+ *
+ *   Why CS stays GPIO: SPI1_CSN is auto-toggled by the controller
+ *   per byte/transfer.  GC9D01 requires CS low across the entire
+ *   command+data sequence.  Auto-toggling CS resets the panel state
+ *   machine and all commands are lost.
+ *
+ ****************************************************************************/
+
+static void lcd_spi_pins_to_spi(void)
+{
+  /* Hardware SPI1 is only wired to the left screen (P2/P4).
+   * If the active panel is not the left one, do nothing — the caller
+   * must not attempt HW SPI on the right screen.
+   */
+
+  if (g_pins_in_spi_mode)
+    {
+      return;
+    }
+
+  if (g_active_pins != &g_lcd_left)
+    {
+      return;
+    }
+
+  /* Only SCLK and MOSI → SPI1 peripheral.  CS stays GPIO. */
+
+  gpio_set_second_func(g_active_pins->sclk, 0);  /* SPI1_SCK  func0 */
+  gpio_set_second_func(g_active_pins->mosi, 0);  /* SPI1_MOSI func0 */
+
+  g_pins_in_spi_mode = true;
+}
+
+static void lcd_spi_pins_to_gpio(void)
+{
+  if (!g_pins_in_spi_mode)
+    {
+      return;
+    }
+
+  /* Restore SCLK and MOSI to GPIO output mode using the ACTIVE panel's
+   * pins, not hardcoded g_lcd_left.  This prevents corrupting the GPIO
+   * cache when the active panel has changed since to_spi() was called.
+   */
+
+  gpio_set_output_cached(g_active_pins->sclk, &g_cache_sclk);
+  gpio_set_output_cached(g_active_pins->mosi, &g_cache_mosi);
+
+  g_pins_in_spi_mode = false;
+}
+
+/****************************************************************************
+ * Name: lcd_spi_write
+ *
+ * Description:
+ *   Write data bytes via hardware SPI1 with timeout-protected polling.
+ *   Returns 0 on success, -ETIMEDOUT if FIFO stalls.
+ *   If sent_out is non-NULL, *sent_out receives the number of bytes
+ *   successfully written before return (0 on success = full len).
+ *
+ * HARDWARE NOTE 1: BK7258 SPI does NOT assert tx_finish_int (bit13) when
+ *   tx_trans_len == 1.  Observed empirically: all len=1 transfers timeout
+ *   with INT_STATUS=0x00000003, while len>=2 always get bit13.
+ *   Callers should route len < SPI_HWSPI_MIN_LEN through bit-bang instead.
+ *
+ * HARDWARE NOTE 2: tx_en rising edge latches trans_len.
+ *   The controller loads tx_trans_len into its internal counter on the
+ *   rising edge of tx_en (0→1).  If tx_en stays 1 across chunks, the
+ *   new trans_len is never loaded and the FIFO stalls after ~70 bytes.
+ *   Therefore each chunk MUST: (1) clear tx_en, (2) set trans_len,
+ *   (3) set tx_en (rising edge).  At the end of each chunk, tx_en must
+ *   be cleared again so the next chunk gets a fresh rising edge.
+ *   ARMino reference: spi_driver.c spi_hal_enable_tx() is always a
+ *   separate register write after spi_hal_set_tx_trans_len().
+ *
+ ****************************************************************************/
+
+static int lcd_spi_write(const uint8_t *data, size_t len,
+                         size_t *sent_out)
+{
+  size_t remaining = len;
+  const uint8_t *p = data;
+  uint32_t cfg;
+
+  /* Guard: HW SPI only works with left screen pins (P2/P3/P4).
+   * If caches point to right screen, CS/DC would go to P23/P7 —
+   * left screen ignores all data, right screen gets no clock.
+   */
+
+  if (g_active_pins != &g_lcd_left)
+    {
+      syslog(LOG_ERR,
+             "[lcd] lcd_spi_write called with wrong pins "
+             "(cached=%s, need left)\n",
+             g_active_pins ? "right" : "none");
+      return -EINVAL;
+    }
+#ifdef CONFIG_LCD_GC9D01_SPI_VERIFY
+  size_t bytes_written = 0;
+  size_t chunks_sent = 0;
+#endif
+
+  if (sent_out != NULL)
+    {
+      *sent_out = 0;
+    }
+
+  while (remaining > 0)
+    {
+      size_t chunk = remaining;
+      uint32_t poll_cnt;
+      uint32_t st;
+
+      if (chunk > g_spi_max_chunk)
+        {
+          chunk = g_spi_max_chunk;
+        }
+
+      /* [A] Clear TX/RX FIFO (bit16, bit17).
+       * ARMino: spi_hal_clear_tx_fifo → spi_ll_clear_tx_fifo (bit16=1)
+       */
+
+      putreg32(SPI_INT_TX_FIFO_CLR | SPI_INT_RX_FIFO_CLR,
+               SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+      /* [A2] Clear status bits 8..14 only (write-1-to-clear).
+       * Do NOT write 0xFFFFFFFF — that would pulse bit16/17 (FIFO clear)
+       * again, which is unnecessary and could disturb the FIFO state.
+       * Bits: 8=tx_fifo_int, 9=rx_fifo_int, 10=rx_finish,
+       *       11=tx_underflow, 12=tx_finish, 13=rx_underflow, 14=cs_done
+       */
+
+      putreg32(0x7F00u, SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+      /* [B] Set TX transfer length with tx_en = 0.
+       * This must be a SEPARATE step from [C] — the controller latches
+       * trans_len on the tx_en rising edge.  If we set trans_len and
+       * tx_en=1 in the same write, there is no rising edge for the
+       * second chunk (tx_en was already 1 from the previous chunk).
+       *
+       * ARMino: spi_hal_set_tx_trans_len(size) — only touches trans_len
+       *         field, tx_en is left as-is (0 at this point).
+       */
+
+      cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+      cfg &= ~SPI_CFG_TX_EN_BIT;  /* tx_en = 0 — prerequisite for rising edge */
+      cfg &= ~(SPI_CFG_TX_TRANS_LEN_MASK << SPI_CFG_TX_TRANS_LEN_SHIFT);
+      cfg |= (chunk << SPI_CFG_TX_TRANS_LEN_SHIFT);
+      cfg |= SPI_CFG_TX_FINISH_INT_EN_BIT; /* preserve bit2 */
+      putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+
+      /* [C] Enable TX — rising edge (0→1) latches trans_len.
+       * This MUST be a separate putreg32 from [B].
+       * ARMino: spi_hal_enable_tx() — separate register write.
+       */
+
+      cfg |= SPI_CFG_TX_EN_BIT;
+      putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+
+      /* [D] Feed FIFO.
+       *
+       * g_spi_burst=1 (default): per-byte polling via tx_fifo_wr_ready
+       *   (INT_STATUS bit1).  Matches ARMino spi_id_write_bytes_common.
+       *
+       * g_spi_burst=16/32: uses tx_fifo_int (INT_STATUS bit8).
+       *   CTRL bits[1:0] = level (1→16, 2→32).
+       *   tx_fifo_int asserts when FIFO occupancy <= level
+       *   (i.e. empty >= FIFO_DEPTH(64) - level).
+       *   bit8 is write-1-to-clear: must clear before each re-poll,
+       *   otherwise a stale assertion causes immediate pass → overflow.
+       *
+       *   burst=48 is NOT supported: level=3 only guarantees 16 empty
+       *   slots, writing 48 overflows.  See SPI_FIFO_DEPTH comment.
+       */
+
+      size_t i;
+
+      for (i = 0; i < chunk; )
+        {
+          size_t burst = chunk - i;
+          size_t b;
+
+          if (burst > g_spi_burst)
+            {
+              burst = g_spi_burst;
+            }
+
+          if (g_spi_burst <= 1)
+            {
+              /* ---- burst=1: per-byte tx_fifo_wr_ready polling ---- */
+
+              poll_cnt = SPI_POLL_TIMEOUT;
+
+              while (!(getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE)) &
+                       SPI_INT_TX_FIFO_WR_READY))
+                {
+                  if (--poll_cnt == 0)
+                    {
+                      size_t done = (size_t)(p - data) + i;
+
+                      st = getreg32(SPI_REG_INT_STATUS(
+                                      BK7258_SPI1_BASE));
+
+                      syslog(LOG_ERR,
+                             "[lcd] SPI TX FIFO timeout, "
+                             "INT_STATUS=0x%08lx sent=%lu/%lu "
+                             "total_done=%lu/%lu\n",
+                             (unsigned long)st,
+                             (unsigned long)i,
+                             (unsigned long)chunk,
+                             (unsigned long)done,
+                             (unsigned long)len);
+                      cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+                      cfg &= ~SPI_CFG_TX_EN_BIT;
+                      putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+                      lcd_spi_pins_to_gpio();
+                      if (sent_out != NULL)
+                        {
+                          *sent_out = done;
+                        }
+
+                      return -ETIMEDOUT;
+                    }
+                }
+
+              putreg32(p[i], SPI_REG_DATA(BK7258_SPI1_BASE));
+              i++;
+            }
+          else
+            {
+              /* ---- burst>1: tx_fifo_int level polling ---- */
+
+              /* Clear tx_fifo_int (write-1-to-clear bit8) BEFORE polling.
+               * A stale assertion from a previous iteration would cause an
+               * immediate pass and FIFO overflow.
+               */
+
+              putreg32(SPI_INT_TX_FIFO_INT,
+                       SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+              poll_cnt = SPI_POLL_TIMEOUT;
+
+              while (!(getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE)) &
+                       SPI_INT_TX_FIFO_INT))
+                {
+                  if (--poll_cnt == 0)
+                    {
+                      size_t done = (size_t)(p - data) + i;
+
+                      st = getreg32(SPI_REG_INT_STATUS(
+                                      BK7258_SPI1_BASE));
+
+                      syslog(LOG_ERR,
+                             "[lcd] SPI TX FIFO INT timeout, "
+                             "INT_STATUS=0x%08lx sent=%lu/%lu "
+                             "total_done=%lu/%lu burst=%lu\n",
+                             (unsigned long)st,
+                             (unsigned long)i,
+                             (unsigned long)chunk,
+                             (unsigned long)done,
+                             (unsigned long)len,
+                             (unsigned long)g_spi_burst);
+                      cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+                      cfg &= ~SPI_CFG_TX_EN_BIT;
+                      putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+                      lcd_spi_pins_to_gpio();
+                      if (sent_out != NULL)
+                        {
+                          *sent_out = done;
+                        }
+
+                      return -ETIMEDOUT;
+                    }
+                }
+
+              /* Write burst bytes to FIFO (no per-byte ready check).
+               * The FIFO has >= burst empty slots at this point.
+               */
+
+              for (b = 0; b < burst; b++)
+                {
+                  putreg32(p[i + b], SPI_REG_DATA(BK7258_SPI1_BASE));
+                }
+
+              i += burst;
+            }
+        }
+
+#ifdef CONFIG_LCD_GC9D01_SPI_VERIFY
+      bytes_written += chunk;
+      chunks_sent++;
+#endif
+
+      /* [E] Wait for TX finish (bit13) — the controller has clocked out
+       * all tx_trans_len bytes.
+       * ARMino: ISR checks spi_ll_is_tx_finish_int_triggered(status, BIT(13)),
+       *         then calls bk_spi_clr_tx → disable_tx.
+       * We poll bit13 directly.  Also accept bit11 (tx_underflow) as a
+       * secondary indicator — it fires when the FIFO drains faster than
+       * expected, which is benign and means data was sent.
+       *
+       * CRITICAL: do NOT clear INT_STATUS between feeding and waiting.
+       */
+
+      poll_cnt = SPI_POLL_TIMEOUT;
+
+      for (;;)
+        {
+          st = getreg32(SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+          if (st & (SPI_INT_TX_FINISH | SPI_INT_TX_UNDERFLOW))
+            {
+              break;
+            }
+
+          if (--poll_cnt == 0)
+            {
+              size_t done = (size_t)(p - data) + chunk;
+
+              syslog(LOG_ERR,
+                     "[lcd] SPI TX finish timeout, "
+                     "INT_STATUS=0x%08lx sent=%lu/%lu "
+                     "total_done=%lu/%lu\n",
+                     (unsigned long)st,
+                     (unsigned long)chunk,
+                     (unsigned long)chunk,
+                     (unsigned long)done,
+                     (unsigned long)len);
+              cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+              cfg &= ~SPI_CFG_TX_EN_BIT;
+              putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+              lcd_spi_pins_to_gpio();
+              if (sent_out != NULL)
+                {
+                  *sent_out = done;
+                }
+
+              return -ETIMEDOUT;
+            }
+        }
+
+      /* tx_finish_int (bit13) fires when the last byte enters the shift
+       * register, NOT when it has fully shifted out.  The final 8 clocks
+       * (4 μs @ 2 MHz) may still be in progress.  Disabling tx_en
+       * immediately truncates that byte, causing cumulative byte
+       * misalignment — visible as diagonal seams on structured content.
+       *
+       * Cost: 10 μs × 50 tiles/frame = 0.5 ms per frame @ tile=1024,
+       * which is 0.24% of 206 ms frame time.  Negligible.  DO NOT
+       * remove this delay again without scope-verifying the MOSI line.
+       */
+
+      up_udelay(10);
+
+      /* [F] Clear completion bits (write-1-to-clear) and disable tx_en.
+       *
+       * tx_en MUST be cleared here — it is the prerequisite for the next
+       * chunk's rising edge.  Without this, the next iteration's
+       * [B]+[C] cannot produce a 0→1 transition, and the new trans_len
+       * is never latched.  This was previously removed as "redundant"
+       * and caused multi-chunk stalls (INT_STATUS=0, sent=70).
+       * ARMino: spi_hal_disable_tx() is called after every chunk.
+       */
+
+      putreg32(st & (SPI_INT_TX_FINISH | SPI_INT_TX_UNDERFLOW),
+               SPI_REG_INT_STATUS(BK7258_SPI1_BASE));
+
+      cfg = getreg32(SPI_REG_CFG(BK7258_SPI1_BASE));
+      cfg &= ~SPI_CFG_TX_EN_BIT;
+      putreg32(cfg, SPI_REG_CFG(BK7258_SPI1_BASE));
+
+      p += chunk;
+      remaining -= chunk;
+    }
+
+#ifdef CONFIG_LCD_GC9D01_SPI_VERIFY
+  if (bytes_written != len)
+    {
+      syslog(LOG_ERR,
+             "[lcd] SPI VERIFY FAIL: requested=%zu written=%zu "
+             "delta=%zd chunks=%zu\n",
+             len, bytes_written,
+             (ssize_t)len - (ssize_t)bytes_written,
+             chunks_sent);
+    }
+#endif
+
+  if (sent_out != NULL)
+    {
+      *sent_out = len;
+    }
+
+  return 0;
+}
+
+#endif /* CONFIG_LCD_GC9D01_HW_SPI */
 
 /****************************************************************************
  * Name: spi_write_byte
