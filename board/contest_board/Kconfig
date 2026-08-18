@@ -56,6 +56,74 @@ config LCD_GC9D01
 		Uses bit-bang SPI on QSPI1 pins (GPIO 2-5) with separate
 		DC pin.  Fills screen with red on boot as a smoke test.
 
+
+config LCD_GC9D01_HW_SPI
+	bool "Use hardware SPI1 for GC9D01 left-screen data"
+	default n
+	depends on LCD_GC9D01
+	---help---
+		Use BK7258 SPI1 peripheral (GPIO 2/3/4) for left-screen
+		data transfers instead of bit-bang SPI.  Right screen stays
+		bit-bang (pins don't map to a single SPI peripheral).
+		All SPI polling loops have timeout protection.
+		Enable only after verifying SPI1 works on your board.
+
+config LCD_GC9D01_SPI_CLK_DIV
+	int "SPI1 clock divider (clk_rate field)"
+	default 1
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		SPI1 clock = XTAL (26 MHz) / (clk_div + 1).
+		clk_div=0  -> 26 MHz
+		clk_div=1  -> 13 MHz (default)
+		clk_div=3  -> 6.5 MHz
+		clk_div=12 -> 2 MHz
+		Range: 0-255 (8-bit field).
+
+config LCD_GC9D01_SPI_BURST
+	int "SPI1 FIFO burst write count"
+	default 32
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		Burst write count for SPI FIFO.  Accepted values: 1, 16, 32.
+		1  = per-byte tx_fifo_wr_ready polling (safe, slow)
+		16 = tx_fifo_int level 1, write 16 bytes per poll
+		32 = tx_fifo_int level 2, write 32 bytes per poll (default)
+
+config LCD_GC9D01_SPI_BYTE_INTERVAL
+	int "SPI1 byte interval (idle clocks between bytes)"
+	default 0
+	range 0 63
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		CTRL register bit[24:29].  Number of idle SCLK cycles
+		inserted between consecutive bytes.  0 is safe for GC9D01.
+
+config LCD_GC9D01_TILE_BYTES
+	int "HW SPI tile buffer size for lcd_fill_rect"
+	default 1024
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		lcd_fill_rect() uses a pre-filled tile buffer to batch pixel
+		data into fewer SPI transfers.  Range: 48-4095.
+
+config LCD_GC9D01_HWSPI_MIN_LEN
+	int "Minimum data length to use hardware SPI"
+	default 8
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		BK7258 SPI does not assert tx_finish_int when tx_trans_len==1.
+		Transfers shorter than this threshold use bit-bang instead.
+
+config LCD_GC9D01_SPI_VERIFY
+	bool "Verify SPI byte count in lcd_spi_write"
+	default n
+	depends on LCD_GC9D01_HW_SPI
+	---help---
+		Count bytes actually written to the SPI DATA register during
+		each lcd_spi_write() call and compare with the requested len.
+		Enable only for debugging.
+
 menu "GC2145 Camera Configuration"
 
 comment "Board-level facts from schematic — DO NOT change without schematic revision"
