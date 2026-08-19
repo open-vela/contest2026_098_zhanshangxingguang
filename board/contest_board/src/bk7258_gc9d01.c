@@ -5324,16 +5324,24 @@ int bk7258_lcdtest_main(int argc, char *argv[])
  *
  ****************************************************************************/
 
-/* TODO List
+/* Resolved: commit granularity for the contest submission
  *
- * YELLOW Split bug-fix vs debug-tool commits for upstream PR
- *    Commit 1 (+1041 lines) and Commit 3 (+1644 lines) each bundle
- *    "bug fix / infrastructure" with "diagnostic commands" (spidiag,
- *    chunk, pat, still, flat, clk, burst).  If submitting to openvela
- *    upstream, reviewers will ask to split into:
- *      - "fix" commits: HW SPI trans_len latching, pin cache desync,
- *        FIFO-depth correction, safe_write bug, multi-chunk transfer
- *      - "tool" commits: lcd_spidiag, lcdtest subcommands, performance
- *        measurement infrastructure
- *    Low urgency -- do before upstream PR, not now.
+ * The two large commits here (HW SPI trans_len fix, +1041 lines; and the
+ * 15x throughput work, +1644 lines) each bundle a bug fix with the
+ * diagnostic commands written to find it (spidiag, chunk, pat, still,
+ * flat, clk, burst).  Splitting them into separate "fix" and "tool"
+ * commits was considered and deliberately NOT done:
+ *
+ *   - Fix and diagnostic code are interleaved within the same functions,
+ *     so a split means picking apart individual hunks by hand.
+ *   - Estimated 1-3 hours with a real risk of introducing errors into
+ *     code that is already tested on hardware.
+ *   - The only benefit is reviewer ergonomics upstream; this is a contest
+ *     submission repository, not an openvela upstream PR.
+ *
+ * If any of this is ever proposed to openvela upstream, do the split at
+ * that point.  The split boundary would be:
+ *   fix   - trans_len latching, pin cache desync, FIFO-depth correction,
+ *           safe_write bug, multi-chunk transfer
+ *   tool  - lcd_spidiag, lcdtest subcommands, measurement infrastructure
  */
