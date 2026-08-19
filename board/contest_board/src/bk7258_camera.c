@@ -3854,3 +3854,148 @@ int bk7258_camera_testpat(void)
 
   return 0;
 }
+
+/****************************************************************************
+ * DEBUG_JOURNAL - GC2145/DVP Hardware Notes
+ ****************************************************************************
+ *
+ * Companion to the DEBUG_JOURNAL block in bk7258_gc9d01.c (SPI/LCD side)
+ * and to board/contest_board/DEBUG_JOURNAL_zh-cn.md section 24.
+ *
+ * ========================================================================
+ * Confirmed Hardware Facts
+ * ========================================================================
+ *
+ * SCCB (sensor control bus):
+ *   Bit-banged, open-drain.  GC2145 7-bit address 0x3C.
+ *   Chip ID: reg 0xF0 = 0x21, reg 0xF1 = 0x45.
+ *   "Drive low" = output_enable(bit3)=0 + output_value(bit1)=0 +
+ *   second_func(bit6)=0.  "Release" = output_enable=1 (disabled) +
+ *   input_enable(bit2)=1.  Never drive high: the bus has an external
+ *   pull-up and driving high fights other devices.
+ *
+ * MCLK:
+ *   Must be on P27 with function select = 1.  No other pin works; the
+ *   clock output is hard-wired to that pad function.
+ *   Source select and divider live in the 0x44010000 SYS register block.
+ *
+ * DVP data bus:
+ *   P29-P39 (11 pins: PCLK, HSYNC, VSYNC, PXDATA0-7), function select 0.
+ *   CFG per pin: output disabled, input disabled, pull disabled,
+ *   second_func = 1.  Note function select 0 and second_func 1 are two
+ *   different fields in two different registers; both are required.
+ *
+ * Interrupt path:
+ *   The DVP (YUV_BUF/CIS) interrupt does NOT reach the NVIC directly.
+ *   BK7258 has a SYS-level interrupt aggregator in front of the NVIC:
+ *   cpu1_int_32_63_en at 0x4401008C must be enabled as well.  This is
+ *   the same class of trap as the UART RX issue in section 18.27 of the
+ *   markdown journal - two gates in series, enabling only the NVIC one
+ *   leaves the interrupt permanently silent.
+ *
+ * Module clock gate:
+ *   sys_reserver_reg0xd at 0x44010034, bit[9] = cis_auxs_cken.
+ *
+ * Frame buffers:
+ *   YUYV 640x480 = 614400 bytes per frame, two buffers in PSRAM at
+ *   0x60000000.  DVP DMA needs 32/64-byte alignment, which plain
+ *   mm_malloc cannot guarantee - this is why bk7258_psram_memalign()
+ *   was added during the PSRAM S4 stage (see markdown section 22.12).
+ *   Preview scratch buffer at 0x6012C000, 160x160x2 = 51200 bytes.
+ *
+ * ========================================================================
+ * Pixel Format: UYVY, not YUYV
+ * ========================================================================
+ *
+ * GC2145 register 0x84 = 0x02 produces UYVY.  ARMino's dvp_gc2145.c
+ * annotates this value as "yuyv", which is wrong.  Verified by dumping
+ * PSRAM after a capture: the actual byte order is U Y0 V Y1.
+ *
+ * Getting this backwards does not produce garbage - it produces a
+ * plausible-looking but wrongly-tinted image, which is why it survived
+ * several debugging rounds.  The symptom that finally exposed it was
+ * colour channels swapping when the sampling offset shifted by one byte.
+ *
+ * Identifier naming in this file still says YUYV in places because it
+ * tracks the ARMino register table it was ported from; the runtime
+ * conversion path (uyvy_to_rgb565_scaled) uses the correct order.
+ *
+ * ========================================================================
+ * Ping-Pong Buffer Ownership
+ * ========================================================================
+ *
+ * Three-state ownership avoids the DVP-vs-consumer race:
+ *
+ *   g_cur_buf    the buffer DVP is currently writing into
+ *   g_ready_buf  a complete frame waiting to be consumed (-1 = none)
+ *   g_busy_buf   the buffer a consumer is currently reading (-1 = none)
+ *
+ * On YUV_ARV (frame complete) in ISR context:
+ *   advance only if g_ready_buf < 0 AND next_buf != g_busy_buf.
+ *   Otherwise increment g_drop_count and keep writing the same buffer.
+ *
+ * The point is that the ISR never hands DVP a buffer someone else is
+ * reading, and never overwrites an undelivered frame.  Dropping a frame
+ * is always preferable to tearing one.  The DVP write address register
+ * (YUV_BUF_REG_0x08) is reprogrammed inside the ISR, so the handoff is
+ * atomic with respect to the consumer.
+ *
+ * Before this change the consumer read whichever buffer DVP happened to
+ * be filling, producing intermittent horizontal tearing that looked like
+ * an SPI timing problem.  Worth remembering: a display artefact is not
+ * necessarily a display bug.
+ *
+ * ========================================================================
+ * Preview Performance (about 7 fps)
+ * ========================================================================
+ *
+ * camera preview 30 left: about 127.6 ms/frame
+ *   blit                about 50 ms   SPI transfer at 13MHz/burst 32
+ *   downsample+convert  about 78 ms   dominant cost
+ *
+ * The 78 ms is not arithmetic, it is PSRAM access pattern.
+ * uyvy_to_rgb565_scaled() reads 3 source bytes per output pixel, so a
+ * 160x160 output means roughly 76800 scattered PSRAM reads.  PSRAM sits
+ * behind QSPI, where per-access overhead dominates and only sequential
+ * bursts approach the nominal bandwidth.
+ *
+ * Deliberately NOT optimised.  Full-screen preview is a bring-up and
+ * demo path, not the production one.  Production is: capture to PSRAM,
+ * run face detection there, emit a direction, and redraw only the eyes.
+ * A 60x60 iris region is 7200 bytes, about 7 ms at 1000 KB/s, which is
+ * comfortable for smooth animation.
+ *
+ * If it ever does need optimising, in order of preference:
+ *   a) stage source scanlines into SRAM with memcpy first, turning
+ *      scattered PSRAM reads into sequential bursts;
+ *   b) configure DVP hardware crop so capture is already 160x160 and
+ *      conversion becomes 1:1, removing the scatter entirely.
+ *
+ * This measurement is the input to the next work item (face detection):
+ * the algorithm's memory access pattern, not its instruction count, is
+ * what decides whether it fits.
+ *
+ * ========================================================================
+ * Gotchas
+ * ========================================================================
+ *
+ * a) 0x44010028 and 0x44010030 are SHARED between LCD and DVP clock
+ *    configuration.  Always read-modify-write.  A blank overwrite
+ *    silently corrupts the other subsystem's clock and the failure
+ *    surfaces far away from the write.
+ *
+ * b) Save and restore the full 4-bit function field plus the pin CFG
+ *    when taking over or releasing pins (gpio_state_t, mclk_state_t).
+ *    Restoring a guessed default instead of the saved value breaks
+ *    whatever owned the pin before.
+ *
+ * c) SDA and SCL must be distinct pins.  The code asserts this because
+ *    a misconfigured Kconfig produced a silent "SDA=SCL" bus that
+ *    ACKed nothing and looked like a dead sensor.
+ *
+ * d) Board-level reserved pins are checked before claiming DVP pins,
+ *    because P29 was previously the left LCD reset line.  Pin
+ *    reassignment between subsystems is the most common source of
+ *    "it worked yesterday" regressions on this board.
+ *
+ ****************************************************************************/
