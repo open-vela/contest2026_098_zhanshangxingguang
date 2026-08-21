@@ -5228,32 +5228,48 @@ int bk7258_lcdtest_main(int argc, char *argv[])
  * Camera Preview Performance (post-fix, ~7 fps)
  * ========================================================================
  *
- * camera preview 30 left: ~127.6 ms/frame → ~7 fps
+ * camera preview 30 left: ~127.6 ms/frame -> ~7 fps  (measured at -O0)
  *   blit               ~50 ms   (SPI transfer)
- *   downsample+convert ~78 ms   ← NEW BOTTLENECK
+ *   downsample+convert ~78 ms   <- dominant cost
  *
- * Root cause: uyvy_to_rgb565_scaled() reads 3 PSRAM bytes per output
- * pixel (p[0]/p[1]/p[2]).  For 160×160 output = 25600 pixels → ~76800
- * scattered PSRAM reads.  PSRAM uses QSPI; scattered reads have much
- * higher per-access overhead than sequential burst reads.
+ * SUPERSEDED 2026-08-20.  This block used to blame the PSRAM access
+ * pattern (~76800 scattered reads behind QSPI) and proposed SRAM staging
+ * as the fix.  "camera bench" disproved both.  Full analysis lives in
+ * bk7258_camera.c's DEBUG_JOURNAL and DEBUG_JOURNAL_zh-cn.md section 25;
+ * the short version:
  *
- * 🟡 Candidate optimizations (NOT implemented, low priority):
+ *   Three paths with identical output pixel count and identical
+ *   instruction path, differing only in source location and access order:
+ *              -O0                    -Os
+ *     A  PSRAM scattered   55 ms       13 ms   (204800 B touched)
+ *     C  PSRAM sequential  54 ms       13 ms   ( 51200 B touched)
+ *     B  SRAM  sequential  54 ms       12 ms   ( 51200 B touched)
  *
- *   a) SRAM staging: memcpy source scanlines to SRAM before sampling.
- *      Converts scattered PSRAM reads into sequential burst reads.
- *      Trade-off: extra SRAM copy, but SRAM is ~10× faster for random
- *      access.
+ *   Access pattern is worth 1% (-O0) / 3% (-Os); memory type shows no
+ *   measurable difference.  The real cause is -O0 code size: 177
+ *   instructions per output pixel, 66 of them (37%) stack accesses.  At
+ *   -Os that becomes 43 instructions / 3 stack accesses and the loop runs
+ *   4.2x faster.  Measured CPI 1.45 (-O0) / 1.40 (-Os), so XIP flash
+ *   instruction fetch is not stalling either.
  *
- *   b) DVP hardware crop: configure DVP to capture only 160×160 region.
- *      Conversion becomes 1:1 (no downsampling), eliminating the
- *      scattered-read pattern entirely.
+ * Therefore:
+ *   a) SRAM staging: DEAD.  Moving the 204800 B a real downscale needs
+ *      costs 44 ms (-O0) / 12 ms (-Os) to recover ~0.4 ms.
+ *   b) DVP hardware crop: still useful, but because it cuts the pixel
+ *      count, not because it removes scatter.
  *
- *   NOT implementing now because:
- *     - Full-screen preview is a demo, not the production path.
- *     - Production path: camera → PSRAM face detect → direction →
- *       screen draws eyes (partial refresh only).
- *     - A 60×60 iris region = 7200 bytes.  At 1000 KB/s → ~7ms blit.
- *       More than sufficient for smooth eye animation.
+ * Still NOT optimising the preview path further:
+ *   - Full-screen preview is a demo, not the production path.
+ *   - Production path: camera -> PSRAM detect -> direction -> screen
+ *     draws eyes (partial refresh only).
+ *   - A 60x60 iris region = 7200 bytes.  At 1666 KB/s (-Os) -> ~4 ms
+ *     blit.  More than sufficient for smooth eye animation.
+ *
+ * Note on this file's own numbers: the SPI figures above were taken at
+ * -O0.  At -Os the same "lcdtest chunk 4094 sram multi" reports 30 ms /
+ * 1666 KB/s instead of 50 ms / 1000 KB/s.  The 15x figure in the
+ * measurement table below is a -O0-to--O0 comparison and remains valid as
+ * such, but absolute timings shift with the optimisation level.
  *
  * ========================================================================
  * Hardware Behavior Gotchas (HIGH RISK — repeated pitfall source)
