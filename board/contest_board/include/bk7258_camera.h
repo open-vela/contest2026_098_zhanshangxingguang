@@ -155,6 +155,7 @@ int bk7258_camera_stream(int n_frames);
 int bk7258_camera_preview(int n_frames, int panel);
 int bk7258_camera_dump(void);
 int bk7258_camera_testpat(void);
+int bk7258_camera_bench(void);
 
 void bk7258_lcd_blit_rgb565(int panel,
                              uint16_t x0, uint16_t y0,

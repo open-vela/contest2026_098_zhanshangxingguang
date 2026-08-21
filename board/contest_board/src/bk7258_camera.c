@@ -19,19 +19,19 @@
  ****************************************************************************/
 
 /****************************************************************************
- * GC2145 Phase 1 — DVP IO + sensor init + PSRAM framebuf
+ * GC2145 Phase 1 - DVP IO + sensor init + PSRAM framebuf
  *
- * Phase 0: "camera id" — reads GC2145 chip ID via SCCB bit-bang
+ * Phase 0: "camera id" - reads GC2145 chip ID via SCCB bit-bang
  * Phase 1: DVP data pin mux (P29-P39), GC2145 YUYV init, PSRAM buffer
  *
  * BK7258 GPIO CFG register (per-pin, at AON_GPIO_BASE + pin*4):
- *   bit[0]   gpio_input     (RO) — reads pin level
- *   bit[1]   gpio_output    (RW) — OUTPUT VALUE: 0=low, 1=high
- *   bit[2]   input_enable   (RW) — 1=enable input buffer
- *   bit[3]   output_enable  (RW, active-low) — 0=output enabled
- *   bit[4]   pull_mode      (RW) — 1=pull-up
- *   bit[5]   pull_enable    (RW) — 1=enable pull
- *   bit[6]   second_func    (RW) — 1=peripheral function, 0=GPIO
+ *   bit[0]   gpio_input     (RO) - reads pin level
+ *   bit[1]   gpio_output    (RW) - OUTPUT VALUE: 0=low, 1=high
+ *   bit[2]   input_enable   (RW) - 1=enable input buffer
+ *   bit[3]   output_enable  (RW, active-low) - 0=output enabled
+ *   bit[4]   pull_mode      (RW) - 1=pull-up
+ *   bit[5]   pull_enable    (RW) - 1=enable pull
+ *   bit[6]   second_func    (RW) - 1=peripheral function, 0=GPIO
  *
  * Open-drain SCCB:
  *   Drive low  = output_enable=0, output_value=0, second_func=0
@@ -58,6 +58,7 @@
 #include <debug.h>
 
 #include <nuttx/arch.h>
+#include <nuttx/clock.h>
 #include <nuttx/irq.h>
 #include <nuttx/spinlock.h>
 
@@ -126,7 +127,7 @@
 #define YUV_BUF_INT_H264_ERR      (1u << 7)   /* H264 error */
 #define YUV_BUF_INT_ENC_SLOW      (1u << 8)   /* encode slow */
 
-/* INT_STATUS register (0x0a) — same bit layout as INT_EN */
+/* INT_STATUS register (0x0a) - same bit layout as INT_EN */
 
 #define YUV_BUF_INT_STATUS_MASK   0x1FFu      /* bits[8:0] */
 
@@ -141,13 +142,13 @@
  * Address: SOC_SYS_REG_BASE + 0xd * 4 = 0x44010000 + 0x34
  * Same register as CAMERA_CLK_EN_REG.
  *
- * bit[0]: h264_cken — H264 module clock (needed for YUV_BUF bus)
- * bit[3]: yuv_cken  — YUV_BUF module clock
- * bit[9]: cis_auxs_cken — CIS AUXS MCLK (already used for sensor)
+ * bit[0]: h264_cken - H264 module clock (needed for YUV_BUF bus)
+ * bit[3]: yuv_cken  - YUV_BUF module clock
+ * bit[9]: cis_auxs_cken - CIS AUXS MCLK (already used for sensor)
  *
  * From ARMino sys_video_driver.c:yuv_buf_init_common()
- *   sys_drv_set_h264_clk_en(1);   — bit[0]
- *   sys_drv_set_yuv_buf_clk_en(1); — bit[3]
+ *   sys_drv_set_h264_clk_en(1);   - bit[0]
+ *   sys_drv_set_yuv_buf_clk_en(1); - bit[3]
  */
 
 #define CAMERA_H264_CLKEN_BIT     (1u << 0)
@@ -156,7 +157,7 @@
 /* System Interrupt Enable Register (cpu1_int_32_63_en)
  * Address: SOC_SYS_REG_BASE + 0x23 * 4 = 0x44010000 + 0x8C
  *
- * bit[26]: cpu0_yuvb_int_en — YUV_BUF interrupt enable to CPU0
+ * bit[26]: cpu0_yuvb_int_en - YUV_BUF interrupt enable to CPU0
  *
  * From ARMino sys_types.h:
  *   YUV_BUF_INTERRUPT_CTRL_BIT = (1 << 26)
@@ -168,8 +169,8 @@
 /* YUV_BUF Global Control Register (REG_0x02)
  * Address: YUV_BUF_REG_BASE + 0x02 * 4
  *
- * bit[0]: soft_reset — 0=assert, 1=deassert
- * bit[1]: clk_gate_bypass — 1=bypass clock gate
+ * bit[0]: soft_reset - 0=assert, 1=deassert
+ * bit[1]: clk_gate_bypass - 1=bypass clock gate
  *
  * From ARMino yuv_buf_ll.h:yuv_buf_ll_init()
  *   hw->global_ctrl.soft_reset = 0;   // assert reset
@@ -230,7 +231,7 @@
 #define CAMERA_PIN_SWD_CLK    20
 #define CAMERA_PIN_SWD_IO     21
 
-/* DVP data pin range — P29 through P39 (11 pins)
+/* DVP data pin range - P29 through P39 (11 pins)
  * P29=PCLK, P30=HSYNC, P31=VSYNC, P32-P39=PXDATA[0:7]
  * All use function select = 0 in their respective GPIO_FUNC registers.
  */
@@ -239,7 +240,7 @@
 #define DVP_PIN_LAST    39
 #define DVP_PIN_COUNT   (DVP_PIN_LAST - DVP_PIN_FIRST + 1)
 
-/* Frame buffer parameters — YUYV 640x480 */
+/* Frame buffer parameters - YUYV 640x480 */
 
 #define CAMERA_HRES       640
 #define CAMERA_VRES       480
@@ -281,7 +282,7 @@ static const int g_cam_pwr_pin  = CONFIG_CAMERA_GPIO_PWR_CTL;
 static const int g_cam_pwdn_pin = CONFIG_CAMERA_GPIO_PWDNB;
 static const int g_cam_mclk_pin = CONFIG_CAMERA_MCLK_GPIO;
 
-/* DVP data pin state — saved before dvp_io_config(), restored by dvp_io_deconfig() */
+/* DVP data pin state - saved before dvp_io_config(), restored by dvp_io_deconfig() */
 
 static gpio_state_t g_dvp_state[DVP_PIN_COUNT];
 static bool g_dvp_pins_configed = false;
@@ -291,7 +292,7 @@ static bool g_dvp_pins_configed = false;
 static volatile uint8_t *g_camera_buf[CAMERA_BUF_COUNT] = { NULL, NULL };
 static bool g_framebuf_allocated = false;
 
-/* Streaming state — ping-pong double buffering */
+/* Streaming state - ping-pong double buffering */
 
 #define PREVIEW_W       160
 #define PREVIEW_H       160
@@ -316,7 +317,7 @@ extern void bk7258_lcd_blit_rgb565(int panel,
                                     uint16_t w, uint16_t h,
                                     const uint8_t *rgb565);
 
-/* DVP controller state — saved before dvp_ctrl_config(), restored by
+/* DVP controller state - saved before dvp_ctrl_config(), restored by
  * dvp_ctrl_deconfig().  Only field-level RMW on shared registers.
  */
 
@@ -326,7 +327,7 @@ typedef struct
   uint32_t pixel;       /* full PIXEL register value (0x05) */
   uint32_t em_base;     /* EM_BASE_ADDR register value (0x08) */
   uint32_t int_en;      /* INT_EN register value (0x09) */
-  uint32_t int_status;  /* INT_STATUS register value (0x0a) — write to clear */
+  uint32_t int_status;  /* INT_STATUS register value (0x0a) - write to clear */
   bool     valid;
 } dvp_ctrl_state_t;
 
@@ -334,7 +335,7 @@ static dvp_ctrl_state_t g_dvp_ctrl_saved = { .valid = false };
 static bool g_dvp_ctrl_configed = false;
 static bool g_dvp_irq_attached = false;
 
-/* DVP interrupt counters — incremented in ISR context */
+/* DVP interrupt counters - incremented in ISR context */
 
 static volatile uint32_t g_dvp_vsync_count = 0;
 static volatile uint32_t g_dvp_hsync_count = 0;  /* not used yet, reserved */
@@ -1133,7 +1134,7 @@ static int sccb_start(void)
 
   if (!gpio_read_input(g_cam_sda_pin))
     {
-      /* SDA stuck low — 9-clock recovery */
+      /* SDA stuck low - 9-clock recovery */
 
       int i;
       for (i = 0; i < 9; i++)
@@ -1148,7 +1149,7 @@ static int sccb_start(void)
         }
       if (!gpio_read_input(g_cam_sda_pin))
         {
-          syslog(LOG_ERR, "[camera] SDA stuck low — recovery failed\n");
+          syslog(LOG_ERR, "[camera] SDA stuck low - recovery failed\n");
           return -EIO;
         }
     }
@@ -1334,10 +1335,10 @@ stop_fail:
  * MCLK
  *
  * mclk_enable_24mhz modifies 4 registers:
- *   1. GPIO FUNC (shared P24-P31) — only P27 bits
- *   2. P27 GPIO CFG — set second_func=1 (bit6)
- *   3. CLK DIV — cksel + ckdiv
- *   4. CLK EN — enable gate
+ *   1. GPIO FUNC (shared P24-P31) - only P27 bits
+ *   2. P27 GPIO CFG - set second_func=1 (bit6)
+ *   3. CLK DIV - cksel + ckdiv
+ *   4. CLK EN - enable gate
  *
  * Restore uses read-modify-write on shared registers.
  ****************************************************************************/
@@ -1368,13 +1369,13 @@ static void mclk_restore_state(const mclk_state_t *ms)
 
   if (!ms->valid) return;
 
-  /* 1. Gate OFF first — avoid glitch while source/divider changes */
+  /* 1. Gate OFF first - avoid glitch while source/divider changes */
 
   val = getreg32(CAMERA_CLK_EN_REG);
   val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
   putreg32(val, CAMERA_CLK_EN_REG);
 
-  /* 2. Restore cksel/ckdiv — read-modify-write, safe while gate off */
+  /* 2. Restore cksel/ckdiv - read-modify-write, safe while gate off */
 
   val = getreg32(CAMERA_CLK_DIV_REG);
   val &= ~((CAMERA_CKSEL_MASK << CAMERA_CKSEL_POS) |
@@ -1382,18 +1383,18 @@ static void mclk_restore_state(const mclk_state_t *ms)
   val |= ms->clk_div;
   putreg32(val, CAMERA_CLK_DIV_REG);
 
-  /* 3. Restore P27 function select — read-modify-write FUNC reg */
+  /* 3. Restore P27 function select - read-modify-write FUNC reg */
 
   val = getreg32(CAMERA_GPIO_FUNC_REG);
   val &= ~(CAMERA_P27_FUNC_MASK << CAMERA_P27_FUNC_SHIFT);
   val |= ms->func2431;
   putreg32(val, CAMERA_GPIO_FUNC_REG);
 
-  /* 4. Restore P27 GPIO CFG (direction/latch/pull) — per-pin, safe */
+  /* 4. Restore P27 GPIO CFG (direction/latch/pull) - per-pin, safe */
 
   putreg32(ms->p27_cfg, BK7258_GPIO_CFG(CAMERA_MCLK_REQUIRED_PIN));
 
-  /* 5. Restore saved gate state — read-modify-write CLK_EN */
+  /* 5. Restore saved gate state - read-modify-write CLK_EN */
 
   val = getreg32(CAMERA_CLK_EN_REG);
   val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
@@ -1405,13 +1406,13 @@ static void mclk_enable_24mhz(void)
 {
   uint32_t val;
 
-  /* 1. Gate OFF — avoid glitch while source/divider changes */
+  /* 1. Gate OFF - avoid glitch while source/divider changes */
 
   val = getreg32(CAMERA_CLK_EN_REG);
   val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
   putreg32(val, CAMERA_CLK_EN_REG);
 
-  /* 2. Unmap P27 — clear function select (ARMino: gpio_dev_unmap) */
+  /* 2. Unmap P27 - clear function select (ARMino: gpio_dev_unmap) */
 
   val = getreg32(CAMERA_GPIO_FUNC_REG);
   val &= ~(CAMERA_P27_FUNC_MASK << CAMERA_P27_FUNC_SHIFT);
@@ -1435,7 +1436,7 @@ static void mclk_enable_24mhz(void)
   val |=  GPIO_CFG_SECOND_FUNC;  /* bit6=1: peripheral function */
   putreg32(val, BK7258_GPIO_CFG(CAMERA_MCLK_REQUIRED_PIN));
 
-  /* 5. Set clock source and divider — read-modify-write
+  /* 5. Set clock source and divider - read-modify-write
    *    (ARMino: sys_drv_set_auxs_cis(3, 19))
    */
 
@@ -1446,7 +1447,7 @@ static void mclk_enable_24mhz(void)
   val |= (CAMERA_CKDIV_24MHZ    << CAMERA_CKDIV_POS);
   putreg32(val, CAMERA_CLK_DIV_REG);
 
-  /* 6. Enable clock gate — read-modify-write
+  /* 6. Enable clock gate - read-modify-write
    *    (ARMino: sys_drv_set_cis_auxs_clk_en(1))
    */
 
@@ -1652,8 +1653,8 @@ static void camera_framebuf_free(void)
  * DVP Module Clock and Interrupt Enable
  *
  * From ARMino yuv_buf_driver.c:yuv_buf_init_common():
- *   1. Enable YUV_BUF power (PM voting — skipped, assume always on)
- *   2. Enable H264 clock (bit[0] of CLK_EN_REG) — needed for bus
+ *   1. Enable YUV_BUF power (PM voting - skipped, assume always on)
+ *   2. Enable H264 clock (bit[0] of CLK_EN_REG) - needed for bus
  *   3. Enable YUV_BUF clock (bit[3] of CLK_EN_REG)
  *   4. Enable system interrupt (bit[26] of INT_32_63_EN_REG)
  *   5. Init global control (soft reset + clock gate bypass)
@@ -1681,7 +1682,7 @@ static int dvp_module_clk_enable(void)
       return 0;
     }
 
-  /* Save register values for restore — only bits we modify */
+  /* Save register values for restore - only bits we modify */
 
   val = getreg32(CAMERA_CLK_EN_REG);
   g_dvp_module_saved.clk_en = val & (CAMERA_H264_CLKEN_BIT |
@@ -1693,7 +1694,7 @@ static int dvp_module_clk_enable(void)
   g_dvp_module_saved.global_ctrl = getreg32(YUV_BUF_REG_0x02);
   g_dvp_module_saved.valid = true;
 
-  /* Step 1: Enable H264 clock — needed for YUV_BUF internal bus
+  /* Step 1: Enable H264 clock - needed for YUV_BUF internal bus
    * From ARMino sys_drv_set_h264_clk_en(1)
    */
 
@@ -1718,7 +1719,7 @@ static int dvp_module_clk_enable(void)
   val |= CAMERA_YUVB_INT_EN_BIT;
   putreg32(val, CAMERA_SYS_INT_32_63_REG);
 
-  /* Step 4: Init global control — soft reset + clock gate bypass
+  /* Step 4: Init global control - soft reset + clock gate bypass
    * From ARMino yuv_buf_ll_init():
    *   hw->global_ctrl.soft_reset = 0;    // assert reset
    *   hw->global_ctrl.soft_reset = 1;    // deassert reset
@@ -1899,14 +1900,14 @@ static int dvp_ctrl_config(uint32_t em_base)
 
   /* Set YUV format to YUYV (controller default).
    * NOTE: actual byte order in PSRAM is UYVY (verified by camera dump).
-   * The controller format field does NOT reorder bytes — it matches
+   * The controller format field does NOT reorder bytes - it matches
    * whatever the sensor outputs.  Software conversion uses UYVY parsing.
    */
 
   val &= ~YUV_BUF_CTRL_FMT_SEL_MASK;
   val |= YUV_BUF_CTRL_FMT_YUYV;
 
-  /* Set PCLK edge — default is rising edge sampling.
+  /* Set PCLK edge - default is rising edge sampling.
    * If CONFIG_DVP_PCLK_FALLING is set, invert to sample on falling edge.
    */
 
@@ -1916,7 +1917,7 @@ static int dvp_ctrl_config(uint32_t em_base)
   val &= ~YUV_BUF_CTRL_VCK_EDGE;  /* sample on rising edge (default) */
 #endif
 
-  /* Set HSYNC polarity — default is active-high (not inverted).
+  /* Set HSYNC polarity - default is active-high (not inverted).
    * If CONFIG_DVP_HSYNC_ACTIVE_LOW is set, invert HSYNC.
    */
 
@@ -1926,7 +1927,7 @@ static int dvp_ctrl_config(uint32_t em_base)
   val &= ~YUV_BUF_CTRL_HSYNC_REV;
 #endif
 
-  /* Set VSYNC polarity — default is active-high (not inverted).
+  /* Set VSYNC polarity - default is active-high (not inverted).
    * If CONFIG_DVP_VSYNC_ACTIVE_LOW is set, invert VSYNC.
    */
 
@@ -1936,11 +1937,11 @@ static int dvp_ctrl_config(uint32_t em_base)
   val &= ~YUV_BUF_CTRL_VSYNC_REV;
 #endif
 
-  /* Disable H264 mode — we're doing raw YUV capture */
+  /* Disable H264 mode - we're doing raw YUV capture */
 
   val &= ~YUV_BUF_CTRL_H264_MODE;
 
-  /* Disable memrev and byte_rev — ARMino disables these for normal
+  /* Disable memrev and byte_rev - ARMino disables these for normal
    * YUV capture mode.  Only enable in nosensor_encode mode.
    */
 
@@ -1971,7 +1972,7 @@ static int dvp_ctrl_config(uint32_t em_base)
 
   putreg32(YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
 
-  /* Start YUV mode — set bit[0] of CTRL (yuv_mode)
+  /* Start YUV mode - set bit[0] of CTRL (yuv_mode)
    * From ARMino bk_yuv_buf_start(YUV_MODE) -> yuv_buf_hal_start_yuv_mode()
    *   yuv_buf_ll_enable_yuv_buf_mode(hal->hw);  // bit[0] = 1
    *   yuv_buf_ll_disable_h264_encode_mode(hal->hw); // bit[3] = 0
@@ -2069,14 +2070,14 @@ static int dvp_irq_handler(int irq, void *context, void *arg)
 
   status = getreg32(YUV_BUF_REG_0x0a);
 
-  /* VSYNC falling edge — frame start */
+  /* VSYNC falling edge - frame start */
 
   if (status & YUV_BUF_INT_VSYNC_NEGE)
     {
       g_dvp_vsync_count++;
     }
 
-  /* YUV arrived — frame data written to memory */
+  /* YUV arrived - frame data written to memory */
 
   if (status & YUV_BUF_INT_YUV_ARV)
     {
@@ -2184,7 +2185,7 @@ static void dvp_irq_detach(void)
 
   putreg32(YUV_BUF_INT_STATUS_MASK, YUV_BUF_REG_0x0a);
 
-  /* Detach ISR — restore default handler */
+  /* Detach ISR - restore default handler */
 
   irq_detach(BK7258_IRQ_YUV_BUF);
 
@@ -2274,7 +2275,7 @@ static int camera_check_config(void)
   if (!ok)
     {
       syslog(LOG_ERR,
-             "[camera] ======== 7 BLOCKERS — no MMIO touched ========\n");
+             "[camera] ======== 7 BLOCKERS - no MMIO touched ========\n");
       return -ENOTSUP;
     }
 
@@ -2409,7 +2410,7 @@ static int camera_check_config(void)
   if (!ok)
     {
       syslog(LOG_ERR,
-             "[camera] Cannot proceed — no MMIO touched.\n");
+             "[camera] Cannot proceed - no MMIO touched.\n");
       return -ENODEV;
     }
 
@@ -2437,7 +2438,7 @@ int bk7258_camera_id(void)
   bool pwr_ok = false, pwdn_ok = false;
   bool mclk_on = false;
 
-  /* ===== Config validation — NO MMIO before this ===== */
+  /* ===== Config validation - NO MMIO before this ===== */
 
   ret = camera_check_config();
   if (ret < 0) return ret;
@@ -2497,7 +2498,7 @@ cleanup:
   if (scl_ok)      gpio_restore_state(&scl_saved);
   if (sda_ok)      gpio_restore_state(&sda_saved);
 
-  syslog(LOG_INFO, "[camera] Cleanup done — pins restored\n");
+  syslog(LOG_INFO, "[camera] Cleanup done - pins restored\n");
 
   if (ret == 0 && stop_ret < 0) ret = stop_ret;
 
@@ -2713,11 +2714,11 @@ int bk7258_camera_init(void)
   }
 
   syslog(LOG_INFO,
-         "[camera] GC2145 init complete — YUYV 640x480\n");
+         "[camera] GC2145 init complete - YUYV 640x480\n");
   syslog(LOG_INFO,
          "[camera] MCLK/power left ON for oscilloscope verification\n");
 
-  /* Restore SCCB pins only — MCLK and power stay ON */
+  /* Restore SCCB pins only - MCLK and power stay ON */
 
   stop_ret = sccb_stop();
   if (scl_ok) gpio_restore_state(&scl_saved);
@@ -2748,7 +2749,7 @@ int bk7258_camera_stop(void)
 {
   uint32_t val;
 
-  /* Detach DVP IRQ first — stop interrupts before modifying registers */
+  /* Detach DVP IRQ first - stop interrupts before modifying registers */
 
   dvp_irq_detach();
 
@@ -2768,7 +2769,7 @@ int bk7258_camera_stop(void)
   val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
   putreg32(val, CAMERA_CLK_EN_REG);
 
-  /* Power off — drive PWR pin inactive */
+  /* Power off - drive PWR pin inactive */
 
   if (g_cam_pwr_pin != CAMERA_GPIO_UNCONFIGURED)
     {
@@ -2787,7 +2788,7 @@ int bk7258_camera_stop(void)
 
   camera_framebuf_free();
 
-  syslog(LOG_INFO, "[camera] Stopped — MCLK off, power off, pins restored\n");
+  syslog(LOG_INFO, "[camera] Stopped - MCLK off, power off, pins restored\n");
   return 0;
 }
 
@@ -2885,7 +2886,7 @@ int bk7258_camera_sync(void)
   if (!g_dvp_pins_configed)
     {
       syslog(LOG_ERR,
-             "[camera] DVP pins not configured — run 'camera init' first\n");
+             "[camera] DVP pins not configured - run 'camera init' first\n");
       return -ENODEV;
     }
 
@@ -2894,11 +2895,11 @@ int bk7258_camera_sync(void)
   if (!g_framebuf_allocated)
     {
       syslog(LOG_ERR,
-             "[camera] Frame buffers not allocated — run 'camera buf' first\n");
+             "[camera] Frame buffers not allocated - run 'camera buf' first\n");
       return -ENOMEM;
     }
 
-  /* Configure DVP controller — use buf[0] as output target.
+  /* Configure DVP controller - use buf[0] as output target.
    * The controller needs a valid em_base_addr even for sync-only test.
    */
 
@@ -2918,7 +2919,7 @@ int bk7258_camera_sync(void)
       goto cleanup_irq;
     }
 
-  /* Wait for VSYNC edges — timeout 5 seconds */
+  /* Wait for VSYNC edges - timeout 5 seconds */
 
   vsync_target = 10;
   timeout_ms   = 5000;
@@ -2972,13 +2973,13 @@ int bk7258_camera_sync(void)
     }
   else
     {
-      syslog(LOG_INFO, "[camera] DVP sync OK — %lu VSYNC edges captured\n",
+      syslog(LOG_INFO, "[camera] DVP sync OK - %lu VSYNC edges captured\n",
              (unsigned long)vsync_now);
       ret = 0;
     }
 
 cleanup_irq:
-  /* Always detach IRQ in sync test — we don't keep it running */
+  /* Always detach IRQ in sync test - we don't keep it running */
 
   dvp_irq_detach();
 
@@ -3019,7 +3020,7 @@ int bk7258_camera_grab(void)
   if (!g_dvp_pins_configed)
     {
       syslog(LOG_ERR,
-             "[camera] DVP pins not configured — run 'camera init' first\n");
+             "[camera] DVP pins not configured - run 'camera init' first\n");
       return -ENODEV;
     }
 
@@ -3028,11 +3029,11 @@ int bk7258_camera_grab(void)
   if (!g_framebuf_allocated)
     {
       syslog(LOG_ERR,
-             "[camera] Frame buffers not allocated — run 'camera buf' first\n");
+             "[camera] Frame buffers not allocated - run 'camera buf' first\n");
       return -ENOMEM;
     }
 
-  /* Fill target buffer with 0x5A pattern — allows detection of
+  /* Fill target buffer with 0x5A pattern - allows detection of
    * whether DMA actually wrote data.
    */
 
@@ -3045,7 +3046,7 @@ int bk7258_camera_grab(void)
       buf[i] = 0x5A;
     }
 
-  /* Configure DVP controller — output to buf[0] */
+  /* Configure DVP controller - output to buf[0] */
 
   ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
   if (ret < 0)
@@ -3063,7 +3064,7 @@ int bk7258_camera_grab(void)
       goto cleanup_irq;
     }
 
-  /* Wait for one complete frame — YUV_ARRIVED interrupt.
+  /* Wait for one complete frame - YUV_ARRIVED interrupt.
    * Timeout 5 seconds.
    */
 
@@ -3095,7 +3096,7 @@ int bk7258_camera_grab(void)
       goto cleanup_irq;
     }
 
-  syslog(LOG_INFO, "[camera] Frame captured — VSYNC=%lu FRAME=%lu\n",
+  syslog(LOG_INFO, "[camera] Frame captured - VSYNC=%lu FRAME=%lu\n",
          (unsigned long)g_dvp_vsync_count,
          (unsigned long)g_dvp_frame_count);
 
@@ -3118,7 +3119,7 @@ int bk7258_camera_grab(void)
              buf[i + 12], buf[i + 13], buf[i + 14], buf[i + 15]);
     }
 
-  /* Check if buffer still contains 0x5A pattern — if so, DMA didn't write */
+  /* Check if buffer still contains 0x5A pattern - if so, DMA didn't write */
 
   {
     bool all_5a = true;
@@ -3134,14 +3135,14 @@ int bk7258_camera_grab(void)
     if (all_5a)
       {
         syslog(LOG_ERR,
-               "[camera] WARNING: buf[0] still 0x5A — DMA may not have "
+               "[camera] WARNING: buf[0] still 0x5A - DMA may not have "
                "written data\n");
         ret = -EIO;
       }
     else
       {
         syslog(LOG_INFO,
-               "[camera] DMA write verified — buf[0] contains non-0x5A data\n");
+               "[camera] DMA write verified - buf[0] contains non-0x5A data\n");
         ret = 0;
       }
   }
@@ -3365,6 +3366,369 @@ static void uyvy_to_rgb565_scaled(const uint8_t *src,
 }
 
 /****************************************************************************
+ * Name: camera_bench_conversion
+ *
+ * Description:
+ *   A/B benchmark to separate PSRAM access bottleneck from XIP flash
+ *   instruction-fetch bottleneck in uyvy_to_rgb565_scaled().
+ *
+ *   Path A - "psram": convert directly from PSRAM source (scattered reads).
+ *   Path B - "sram" : memcpy a 160x160 UYVY crop to SRAM first, then
+ *            convert from there (sequential source reads).
+ *
+ *   Both paths output to the same destination buffer.  memcpy is timed
+ *   separately and reported independently.
+ *
+ *   Each path runs BENCH_ROUNDS iterations; elapsed time is accumulated
+ *   to overcome the 10 ms tick resolution.
+ *
+ ****************************************************************************/
+
+#define BENCH_ROUNDS     50
+#define BENCH_CROP_W     160
+#define BENCH_CROP_H     160
+#define BENCH_CROP_SIZE  (BENCH_CROP_W * BENCH_CROP_H * 2)
+#define BENCH_OUT_PIXELS (BENCH_CROP_W * BENCH_CROP_H)
+
+/* Real staging cost for Path A->SRAM: full 640x480 downscale touches
+ * 160 output rows x 640x2 = 1280 bytes per source row = 204800 bytes.
+ */
+
+#define BENCH_REAL_STAGING_BYTES (BENCH_CROP_H * CAMERA_HRES * 2)
+
+static void camera_bench_conversion(void)
+{
+  volatile uint8_t *psram;
+  const uint8_t *psram_src;
+  uint8_t *dst;
+  clock_t t0;
+  uint32_t elapsed_a;
+  uint32_t elapsed_c;
+  uint32_t elapsed_b;
+  uint32_t elapsed_memcpy;
+  uint32_t total_memcpy_bytes;
+  uint32_t throughput_kbps;
+  uint64_t ns_per_px;
+  int i;
+
+  /* SRAM staging buffer - 51200 bytes, holds one 160x160 UYVY crop */
+
+  static uint8_t sram_stage[BENCH_CROP_SIZE];
+
+  /* SRAM output buffer - keeps dst writes off PSRAM so ns/px reflects
+   * source-side cost only.  Adds 51200 B to .bss (total ~197 KB,
+   * well within the 344064-byte SRAM region).
+   */
+
+  static uint8_t sram_dst[BENCH_CROP_SIZE];
+
+  /* Ensure a frame buffer exists in PSRAM */
+
+  if (!g_framebuf_allocated)
+    {
+      printf("[bench] FAIL: no PSRAM framebuf"
+             " - run camera buf first\n");
+      return;
+    }
+
+  psram = g_camera_buf[0];
+
+  /* Fill with a deterministic UYVY test pattern so the benchmark is
+   * reproducible regardless of whether a real frame was captured.
+   * Luminance ramps horizontally, chroma is neutral (U=V=0x80).
+   */
+
+  printf("[bench] filling PSRAM with UYVY test pattern ...\n");
+
+  for (i = 0; i < CAMERA_FRAME_SIZE; i += 4)
+    {
+      uint8_t y0 = (uint8_t)((i >> 2) & 0xff);
+      uint8_t y1 = (uint8_t)(((i >> 2) + 1) & 0xff);
+
+      psram[i + 0] = 0x80;
+      psram[i + 1] = y0;
+      psram[i + 2] = 0x80;
+      psram[i + 3] = y1;
+    }
+
+  psram_src = (const uint8_t *)g_camera_buf[0];
+  dst = sram_dst;
+
+  /* Path A: PSRAM source, 640x480 -> 160x160 (scale 4x3).
+   * Memory: PSRAM (scattered reads, ~76800 accesses).
+   * Pattern: non-sequential (nearest-neighbour downscale).
+   */
+
+  printf("[bench] Path A:"
+         " PSRAM 640x480->160x160 (scattered) ...\n");
+
+  t0 = clock_systime_ticks();
+
+  for (i = 0; i < BENCH_ROUNDS; i++)
+    {
+      uyvy_to_rgb565_scaled(psram_src, dst,
+                            CAMERA_HRES, CAMERA_VRES,
+                            BENCH_CROP_W, BENCH_CROP_H);
+    }
+
+  elapsed_a = (uint32_t)TICK2MSEC(clock_systime_ticks() - t0);
+
+  /* Path C: PSRAM source, 160x160 -> 160x160 (scale 1x1).
+   * Memory: PSRAM (sequential reads - first 51200 bytes).
+   * Pattern: sequential (1:1 copy, same instruction path as B).
+   *
+   * This isolates the access-pattern variable: A and C both read
+   * from PSRAM, but A scatters while C is sequential.
+   */
+
+  printf("[bench] Path C:"
+         " PSRAM 160x160->160x160 (sequential) ...\n");
+
+  t0 = clock_systime_ticks();
+
+  for (i = 0; i < BENCH_ROUNDS; i++)
+    {
+      uyvy_to_rgb565_scaled(psram_src, dst,
+                            BENCH_CROP_W, BENCH_CROP_H,
+                            BENCH_CROP_W, BENCH_CROP_H);
+    }
+
+  elapsed_c = (uint32_t)TICK2MSEC(clock_systime_ticks() - t0);
+
+  /* memcpy: PSRAM -> SRAM, row-by-row 160x160 crop.
+   * 160 rows x 320 bytes/row = 51200 bytes per iteration.
+   * Measured to derive throughput; real staging cost extrapolated.
+   */
+
+  printf("[bench] memcpy"
+         " PSRAM->SRAM (row-by-row crop) ...\n");
+
+  t0 = clock_systime_ticks();
+
+  for (i = 0; i < BENCH_ROUNDS; i++)
+    {
+      int row;
+      int src_stride = CAMERA_HRES * 2;
+      int crop_stride = BENCH_CROP_W * 2;
+
+      for (row = 0; row < BENCH_CROP_H; row++)
+        {
+          memcpy(sram_stage + row * crop_stride,
+                 psram_src + row * src_stride,
+                 crop_stride);
+        }
+    }
+
+  elapsed_memcpy = (uint32_t)TICK2MSEC(clock_systime_ticks() - t0);
+
+  /* Path B: SRAM source, 160x160 -> 160x160 (scale 1x1).
+   * Memory: SRAM (sequential reads).
+   * Pattern: sequential (identical to Path C).
+   *
+   * C vs B isolates the memory-type variable: same sequential
+   * pattern, but C reads PSRAM while B reads SRAM.
+   */
+
+  printf("[bench] Path B:"
+         " SRAM 160x160->160x160 (sequential) ...\n");
+
+  t0 = clock_systime_ticks();
+
+  for (i = 0; i < BENCH_ROUNDS; i++)
+    {
+      uyvy_to_rgb565_scaled(sram_stage, dst,
+                            BENCH_CROP_W, BENCH_CROP_H,
+                            BENCH_CROP_W, BENCH_CROP_H);
+    }
+
+  elapsed_b = (uint32_t)TICK2MSEC(clock_systime_ticks() - t0);
+
+  /* Avoid division by zero - clamp to 1 ms */
+
+  if (elapsed_a == 0)
+    {
+      elapsed_a = 1;
+    }
+
+  if (elapsed_c == 0)
+    {
+      elapsed_c = 1;
+    }
+
+  if (elapsed_b == 0)
+    {
+      elapsed_b = 1;
+    }
+
+  if (elapsed_memcpy == 0)
+    {
+      elapsed_memcpy = 1;
+    }
+
+  printf("\n");
+  printf("[bench] === camera bench:"
+         " PSRAM vs SRAM, scattered vs sequential ===\n");
+  printf("[bench] output pixels/iter: %d\n",
+         BENCH_OUT_PIXELS);
+  printf("[bench] rounds: %d\n",
+         BENCH_ROUNDS);
+  printf("[bench] dst: SRAM (source-side cost only)\n");
+  printf("\n");
+
+  /* Path timings with ns/px via uint64_t to avoid overflow.
+   * (ms * 1000000) would overflow uint32_t at ms > 4294;
+   * at 50 rounds Path A totals ~3900 ms, only 10% headroom.
+   * Using uint64_t keeps the math exact and future-proof.
+   */
+
+  ns_per_px = (uint64_t)elapsed_a * 1000000ULL
+              / BENCH_ROUNDS / BENCH_OUT_PIXELS;
+  printf("[bench] A  PSRAM-scattered :"
+         " %3lu ms total, %2lu ms/iter, %lu ns/px\n",
+         (unsigned long)elapsed_a,
+         (unsigned long)(elapsed_a / BENCH_ROUNDS),
+         (unsigned long)ns_per_px);
+
+  ns_per_px = (uint64_t)elapsed_c * 1000000ULL
+              / BENCH_ROUNDS / BENCH_OUT_PIXELS;
+  printf("[bench] C  PSRAM-sequential:"
+         " %3lu ms total, %2lu ms/iter, %lu ns/px\n",
+         (unsigned long)elapsed_c,
+         (unsigned long)(elapsed_c / BENCH_ROUNDS),
+         (unsigned long)ns_per_px);
+
+  ns_per_px = (uint64_t)elapsed_b * 1000000ULL
+              / BENCH_ROUNDS / BENCH_OUT_PIXELS;
+  printf("[bench] B  SRAM -sequential:"
+         " %3lu ms total, %2lu ms/iter, %lu ns/px\n",
+         (unsigned long)elapsed_b,
+         (unsigned long)(elapsed_b / BENCH_ROUNDS),
+         (unsigned long)ns_per_px);
+
+  printf("\n");
+
+  /* memcpy throughput and extrapolated real staging cost.
+   * Actual copy: BENCH_ROUNDS x 160 rows x 320 B = 51200 per iter.
+   * Real staging (640-wide source): 160 rows x 1280 B = 204800 B.
+   */
+
+  total_memcpy_bytes =
+      (uint32_t)BENCH_ROUNDS * BENCH_CROP_H * BENCH_CROP_W * 2;
+  throughput_kbps = total_memcpy_bytes / elapsed_memcpy;
+
+  printf("[bench] memcpy (160x320 crop):"
+         " %lu ms total, %lu ms/iter\n",
+         (unsigned long)elapsed_memcpy,
+         (unsigned long)(elapsed_memcpy / BENCH_ROUNDS));
+  printf("[bench] memcpy throughput     : %lu KB/s\n",
+         (unsigned long)throughput_kbps);
+
+  if (throughput_kbps > 0)
+    {
+      printf("[bench] real staging (204800B):"
+             " ~%lu ms at measured throughput\n",
+             (unsigned long)(BENCH_REAL_STAGING_BYTES
+                             / throughput_kbps));
+    }
+
+  printf("\n");
+
+  /* Attribution conclusions - percentage-based threshold.
+   * At 10 ms tick resolution, a 2% difference on 50-round totals
+   * (~2750 ms) is ~55 ms = 5.5 ticks, which is meaningful.
+   * Anything below 2% is indistinguishable from tick jitter.
+   */
+
+  printf("[bench] --- attribution ---\n");
+
+  if (elapsed_a > elapsed_c &&
+      (elapsed_a - elapsed_c) * 100 / elapsed_c >= 2)
+    {
+      printf("[bench] A vs C (same PSRAM):"
+             " scattered +%lu%% slower"
+             " -> access pattern matters\n",
+             (unsigned long)((elapsed_a - elapsed_c)
+                             * 100 / elapsed_c));
+    }
+  else if (elapsed_c > elapsed_a &&
+           (elapsed_c - elapsed_a) * 100 / elapsed_a >= 2)
+    {
+      printf("[bench] A vs C (same PSRAM):"
+             " sequential +%lu%% slower"
+             " (unexpected)\n",
+             (unsigned long)((elapsed_c - elapsed_a)
+                             * 100 / elapsed_a));
+    }
+  else
+    {
+      printf("[bench] A vs C (same PSRAM):"
+             " <2%% delta -> no measurable"
+             " access-pattern effect\n");
+    }
+
+  if (elapsed_c > elapsed_b &&
+      (elapsed_c - elapsed_b) * 100 / elapsed_b >= 2)
+    {
+      printf("[bench] C vs B (same seq)  :"
+             " PSRAM +%lu%% slower"
+             " -> memory type matters\n",
+             (unsigned long)((elapsed_c - elapsed_b)
+                             * 100 / elapsed_b));
+    }
+  else if (elapsed_b > elapsed_c &&
+           (elapsed_b - elapsed_c) * 100 / elapsed_c >= 2)
+    {
+      printf("[bench] C vs B (same seq)  :"
+             " SRAM +%lu%% slower"
+             " (unexpected)\n",
+             (unsigned long)((elapsed_b - elapsed_c)
+                             * 100 / elapsed_c));
+    }
+  else
+    {
+      printf("[bench] C vs B (same seq)  :"
+             " <2%% delta -> no measurable"
+             " memory-type effect\n");
+    }
+
+  printf("\n");
+
+  /* Caveats */
+
+  printf("[bench] NOTE: test pattern U=V=0x80 makes"
+         " cb_i=cr_i=0, so\n"
+         "      clamp branches never fire."
+         " Absolute times are lower\n"
+         "      than real camera data."
+         " Relative A/B/C comparison is\n"
+         "      still valid because all three paths"
+         " take the same branches.\n");
+
+#ifdef CONFIG_DEBUG_NOOPT
+  printf("[bench] NOTE: compiled with"
+         " CONFIG_DEBUG_NOOPT=y (-O0).\n");
+#else
+  printf("[bench] NOTE: compiled with"
+         " CONFIG_DEBUG_FULLOPT=y, which maps to -Os (NOT -O2).\n");
+#endif
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_bench
+ *
+ * Description:
+ *   "camera bench" command entry point.  Delegates to
+ *   camera_bench_conversion() for PSRAM-vs-SRAM access pattern timing.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_bench(void)
+{
+  camera_bench_conversion();
+  return 0;
+}
+
+/****************************************************************************
  * Name: bk7258_camera_preview
  *
  * Description:
@@ -3430,7 +3794,7 @@ int bk7258_camera_preview(int n_frames, int panel)
          "[camera] Preview start: %d frames to LCD (160x160) panel=%d\n",
          n_frames, panel);
 
-  /* Warm-up — discard first 30 frames (sensor AE/AWB convergence) */
+  /* Warm-up - discard first 30 frames (sensor AE/AWB convergence) */
 
   for (i = 0; i < 30; i++)
     {
@@ -3631,7 +3995,7 @@ int bk7258_camera_dump(void)
 
   if (g_dvp_frame_count <= frame_start)
     {
-      syslog(LOG_ERR, "[camera] dump: TIMEOUT — no frame\n");
+      syslog(LOG_ERR, "[camera] dump: TIMEOUT - no frame\n");
       return -ETIMEDOUT;
     }
 
@@ -3640,7 +4004,7 @@ int bk7258_camera_dump(void)
   if (buf[0] == 0xCC && buf[1] == 0xCC && buf[2] == 0xCC)
     {
       syslog(LOG_ERR,
-             "[camera] dump: buf still 0xCC — DMA did not write\n");
+             "[camera] dump: buf still 0xCC - DMA did not write\n");
       return -EIO;
     }
 
@@ -3751,7 +4115,7 @@ int bk7258_camera_dump(void)
  * Name: bk7258_camera_testpat
  *
  * Description:
- *   Bypass camera — generate known RGB565 color bars and blit to LCD.
+ *   Bypass camera - generate known RGB565 color bars and blit to LCD.
  *   If bars display correctly, blit + byte order are fine and the
  *   problem is in YUYV conversion.  If bars also look wrong, the
  *   problem is in the LCD path.
@@ -3779,7 +4143,7 @@ int bk7258_camera_testpat(void)
       0x0000,  /* black       00000_000000_00000 */
     };
 
-  /* Auto-init PSRAM — testpat must be runnable standalone */
+  /* Auto-init PSRAM - testpat must be runnable standalone */
 
   if (!g_framebuf_allocated)
     {
@@ -3805,7 +4169,7 @@ int bk7258_camera_testpat(void)
         }
     }
 
-  /* Readback verify — first pixel should be red (0xF8, 0x00) */
+  /* Readback verify - first pixel should be red (0xF8, 0x00) */
 
   syslog(LOG_INFO,
          "[camera] testpat: buf[0]=0x%02X buf[1]=0x%02X "
@@ -3815,7 +4179,7 @@ int bk7258_camera_testpat(void)
   if (buf[0] != 0xF8 || buf[1] != 0x00)
     {
       syslog(LOG_ERR,
-             "[camera] testpat: PSRAM write FAILED — "
+             "[camera] testpat: PSRAM write FAILED - "
              "data did not stick (got 0x%02X 0x%02X)\n",
              buf[0], buf[1]);
       return -EIO;
@@ -3949,31 +4313,68 @@ int bk7258_camera_testpat(void)
  * Preview Performance (about 7 fps)
  * ========================================================================
  *
- * camera preview 30 left: about 127.6 ms/frame
+ * camera preview 30 left: about 127.6 ms/frame at -O0
  *   blit                about 50 ms   SPI transfer at 13MHz/burst 32
  *   downsample+convert  about 78 ms   dominant cost
  *
- * The 78 ms is not arithmetic, it is PSRAM access pattern.
- * uyvy_to_rgb565_scaled() reads 3 source bytes per output pixel, so a
- * 160x160 output means roughly 76800 scattered PSRAM reads.  PSRAM sits
- * behind QSPI, where per-access overhead dominates and only sequential
- * bursts approach the nominal bandwidth.
+ * SUPERSEDED 2026-08-20.  This block previously attributed the 78 ms to
+ * the PSRAM access pattern (76800 scattered reads behind QSPI).  That was
+ * never isolated, and "camera bench" disproved it.  Original text kept in
+ * DEBUG_JOURNAL_zh-cn.md section 24.5 as a record of the mistake.
  *
- * Deliberately NOT optimised.  Full-screen preview is a bring-up and
- * demo path, not the production one.  Production is: capture to PSRAM,
- * run face detection there, emit a direction, and redraw only the eyes.
- * A 60x60 iris region is 7200 bytes, about 7 ms at 1000 KB/s, which is
- * comfortable for smooth animation.
+ * What the measurement actually shows (see camera_bench_conversion(),
+ * and DEBUG_JOURNAL_zh-cn.md section 25 for the full write-up):
  *
- * If it ever does need optimising, in order of preference:
- *   a) stage source scanlines into SRAM with memcpy first, turning
- *      scattered PSRAM reads into sequential bursts;
- *   b) configure DVP hardware crop so capture is already 160x160 and
- *      conversion becomes 1:1, removing the scatter entirely.
+ *   Three paths, identical output pixel count and identical instruction
+ *   path, differing only in where the source lives and how it is walked:
+ *     A  PSRAM, scattered (4:1/3:1 downscale, 204800 B touched)
+ *     C  PSRAM, sequential (1:1, 51200 B touched)
+ *     B  SRAM,  sequential (1:1, 51200 B touched)
  *
- * This measurement is the input to the next work item (face detection):
- * the algorithm's memory access pattern, not its instruction count, is
- * what decides whether it fits.
+ *              -O0                    -Os
+ *     A   55 ms  2156 ns/px     13 ms   523 ns/px
+ *     C   54 ms  2132 ns/px     13 ms   507 ns/px
+ *     B   54 ms  2132 ns/px     12 ms   500 ns/px
+ *
+ *   A vs C isolates access pattern: 1% (-O0) / 3% (-Os).
+ *   C vs B isolates memory type:    no measurable difference.
+ *
+ * So PSRAM is not the bottleneck and neither is the access pattern.  The
+ * real cause is -O0 code size: the inner loop is 177 instructions per
+ * output pixel, 66 of them (37%) stack accesses.  At -Os it drops to 43
+ * instructions and 3 stack accesses, and the whole loop gets 4.2x faster.
+ *
+ * Measured CPI is 1.45 (-O0) / 1.40 (-Os).  For a core with no cache
+ * executing XIP from QSPI flash that implies an effective prefetch
+ * buffer, i.e. instruction fetch is not stalling either.  Moving the hot
+ * loop into the 16 KB ITCM therefore has limited upside.
+ *
+ * Consequences for the two optimisations this block used to recommend:
+ *   a) SRAM staging: DEAD.  Real staging must move 204800 B (the
+ *      downscale touches 160 rows x 1280 B), costing 44 ms (-O0) /
+ *      12 ms (-Os) at the measured memcpy throughput, to recover the
+ *      1-3% that access pattern is worth, i.e. about 0.4 ms.
+ *   b) DVP hardware crop: still useful, but the reason was wrong.  It
+ *      helps by reducing the pixel count, not by removing scatter.
+ *
+ * Deliberately NOT optimised further.  Full-screen preview is a bring-up
+ * and demo path, not the production one.  Production is: capture to
+ * PSRAM, run detection there, emit a direction, redraw only the eyes.
+ *
+ * Input to the next work item (face detection): the budget is 500 ns per
+ * pixel = 60 cycles = 43 instructions for a full YUV->RGB565 convert.
+ * Selection criterion is INSTRUCTIONS PER PIXEL, not memory access
+ * pattern -- the opposite of what this block used to say.  Algorithms
+ * with irregular access (Haar/LBP cascades walking an integral image)
+ * are not penalised.  Direction finding needs no RGB at all: two
+ * threshold compares on U and V is roughly 10 instructions per pixel,
+ * about 3 ms for a full 160x160 pass, under 1 ms with 1/4 subsampling.
+ *
+ * Methodology lesson: do not attribute performance on an unoptimised
+ * build, and make A/B experiments change exactly one variable.  The
+ * first version of this benchmark had only paths A and B, which varied
+ * memory type and access pattern together and could not attribute
+ * anything.
  *
  * ========================================================================
  * Gotchas
