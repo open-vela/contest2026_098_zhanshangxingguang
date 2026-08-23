@@ -2192,3 +2192,44 @@ ISR 里收到 `YUV_ARV`(整帧写完)时,**仅当** `g_ready_buf < 0`
 - 命令：`camera init` → `camera buf` → `camera track 0`（持续，回车停）；诊断 `camera detect [n]`、`camera uvhist [n] [lo] [hi]`、`lcdtest anim`、`lcdtest clk <div>`。
 
 - 🟢 <span style="color:#1a7f37">**当前状态：人脸跟随双眼全链路打通——检测在不可控光照下稳定、双眼对称跟随且无抖动、持续模式、两屏显示干净。**</span>
+
+---
+## 27. M6 表情引擎（M1）：从"会跟随的眼睛"到"有情绪的伙伴"
+
+> 承接 §26。把"人脸跟随"升级成事件驱动的**情绪状态机**：无人会困、见人会惊喜、跟随时会眨眼。
+> 相关代码：`src/bk7258_gc9d01.c`（表情渲染）、`src/bk7258_camera.c`（`bk7258_camera_velapet` 状态机）、`app/camera/camera_main.c`（`camera velapet`）。
+
+### 27.1 先拍板：三套眼睛风格必须统一
+代码里原有三套画眼风格:A 经典追踪眼(`eye_draw_full/eye_move_pupil`,摄像头跟随在用)、B Cozmo 表情眼(`eye_neutral/happy`)、C O 型眼(`eye_o_*`)。混用会视觉割裂。
+- 🟢 **决策**:全程统一用 **A 经典眼**,情绪靠**调制 A** 表达(眨眼/困半睑/惊喜放大),而不是切风格。代价是补几个 A 风格渲染,换来一致的"拟人双眼"观感。
+
+### 27.2 新增渲染原语(单窗口流式,复用 §26.7 的抗横纹经验)
+- `eye_compose_full(gaze_dx, pupil_r, lid_top_y)`:整只眼**一次开窗 + 一次数据流**,逐像素按 **背景 > 上眼睑 > 高光 > 瞳孔 > 虹膜** 合成。参数化了瞳孔半径(惊喜放大)和上眼睑高度(困)。
+- `bk7258_lcd_eye_expr(panel, expr, gaze)`:映射 `NEUTRAL(r22,无睑)/SLEEPY(r22,睑到 EYE_CY)/WAKE(r30,无睑)`。
+- `bk7258_lcd_eye_blink(panel, gaze)`:眨眼包装。
+
+### 27.3 踩坑:眨眼闭合留"边线圈"
+现象:闭眼瞬间虹膜最外圈残留一环蓝点。
+- **根因**:旧 `eye_blink` 用 `lcd_fill_circle(r=58,黑)` 盖,而虹膜是 `eye_compose_full` 按 `dxi²+dyi² <= 58²` 画的——两种光栅化在半径 58 边界差 1~2 像素,`fill_circle` 盖的黑圈略小,漏盖最外环。
+- 🟢 **修法**:`eye_blink` 改用 `eye_compose_full`——闭眼=上眼睑压到虹膜底(整盘黑),睁眼=正常眼。**同一套光栅器 → 边界像素级一致,残环消失**,顺带走单窗口流式、消除 `fill_circle` 的横纹隐患。(一次修好两个问题。)
+
+### 27.4 状态机(`bk7258_camera_velapet`,纯摄像头驱动)
+在 §26 的"抓帧→检测→gaze→画眼"循环外套一层状态机(结构照搬 `camera_track`,不动原函数):
+
+| 状态 | 进入 | 渲染 |
+|---|---|---|
+| `SLEEP` | 无脸持续 `VP_NOFACE_TO_SLEEP`(40帧) | 半睑 + 每 `VP_BLINK_SLEEP`(100帧)慢眨 |
+| `WAKE` | 从无脸→检出脸 | 瞳孔放大 `VP_WAKE_FRAMES`(6帧)≈0.4s |
+| `TRACK` | WAKE 结束 | §26 的眼神跟随 + 每 `VP_BLINK_TRACK`(50帧)眨眼 |
+
+- `TRACK` 的 gaze 计算**逐字复用 §26**(基线自适应/EMA/左右量程/死区)。所有 LCD 重绘照 §26.7 包 `up_disable_irq(BK7258_IRQ_YUV_BUF)`。
+- 持续模式:`camera velapet` 一直跑,回车停。
+
+### 27.5 踩坑:invert 写反 + 测错命令
+1. **invert 反了**:velapet 里写成 `int d = dir.dx`(=invert=0),但 §26 实测正确朝向是 invert=1(`d = -dir.dx`)。改回 `-dir.dx` 才是"脸右→瞳孔右"。
+2. **测错命令**:改完"没变化",实因跑的是旧的 `camera track 0`(纯跟随、无状态机),而非新的 `camera velapet`。—— 教训:新功能是新命令,别拿旧命令验证。
+
+### 27.6 结果与下一步
+- 🟢 <span style="color:#1a7f37">**M1 完成:`camera velapet` 跑通完整闭环——无人→困(半睑+慢眨)→见人→惊喜(瞳孔放大)→跟随(同向+周期眨眼)→离开→回困→回车退出。**</span>
+- **M2(下一步)**:LED/喇叭情绪外化 + `HAPPY` 态(脸居中且近时打招呼)。
+- **M3(等硬件)**:加速度计(拿起/轻拍)、电池低电"犯困"、语音命令词(等组委会确认 Wanson 授权)。
