@@ -172,6 +172,7 @@ enum
   EYE_EXPR_NEUTRAL = 0,
   EYE_EXPR_SLEEPY,
   EYE_EXPR_WAKE,
+  EYE_EXPR_HAPPY,
 };
 
 void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx);
