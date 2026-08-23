@@ -2413,7 +2413,7 @@ static void eye_move_pupil(int old_dx, int new_dx)
  ****************************************************************************/
 
 static void eye_compose_full(int gaze_dx, int pupil_r,
-                              int lid_top_y)
+                              int lid_top_y, int lid_bot_y)
 {
   static uint8_t buf[120 * 120 * 2]; /* ~28 KB, covers full iris */
   int pcx = EYE_CX + gaze_dx;
@@ -2463,9 +2463,9 @@ static void eye_compose_full(int gaze_dx, int pupil_r,
 
               c = 0x0000;
             }
-          else if (y < lid_top_y)
+          else if (y < lid_top_y || y > lid_bot_y)
             {
-              /* Upper eyelid: black */
+              /* Eyelid (upper or lower): black */
 
               c = 0x0000;
             }
@@ -2576,12 +2576,15 @@ static void eye_blink(int gaze_dx)
    * pixel-perfect, no residual ring, single-window stream.
    */
 
-  eye_compose_full(gaze_dx, EYE_PUPIL_R, EYE_CY + EYE_IRIS_R + 1);
+  eye_compose_full(gaze_dx, EYE_PUPIL_R,
+                    EYE_CY + EYE_IRIS_R + 1,   /* lid_top below iris → all black */
+                    EYE_CY - EYE_IRIS_R - 1);  /* lid_bot above iris → all black */
   up_mdelay(120);
 
   /* Open eye: normal, no eyelid */
 
-  eye_compose_full(gaze_dx, EYE_PUPIL_R, EYE_CY - EYE_IRIS_R);
+  eye_compose_full(gaze_dx, EYE_PUPIL_R, EYE_CY - EYE_IRIS_R,
+                    EYE_CY + EYE_IRIS_R + 1);
 }
 
 /****************************************************************************
@@ -2594,6 +2597,7 @@ static void eye_blink(int gaze_dx)
  *   EYE_EXPR_NEUTRAL: normal eye, pupil r=22, no eyelid
  *   EYE_EXPR_SLEEPY:  half-closed, pupil r=22, lid at EYE_CY
  *   EYE_EXPR_WAKE:    surprised, pupil r=30, no eyelid
+ *   EYE_EXPR_HAPPY:   squinting, pupil r=22, top/bottom lid narrow strip
  *
  ****************************************************************************/
 
@@ -2601,6 +2605,7 @@ void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx)
 {
   int pupil_r;
   int lid_top_y;
+  int lid_bot_y;
 
   /* Switch panel */
 
@@ -2621,22 +2626,31 @@ void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx)
     {
       case EYE_EXPR_SLEEPY:
         pupil_r = EYE_PUPIL_R;
-        lid_top_y = EYE_CY;         /* upper half covered */
+        lid_top_y = EYE_CY;               /* upper half covered */
+        lid_bot_y = EYE_CY + EYE_IRIS_R + 1; /* no lower lid */
         break;
 
       case EYE_EXPR_WAKE:
-        pupil_r = 30;               /* dilated, surprised */
-        lid_top_y = EYE_CY - EYE_IRIS_R; /* no eyelid */
+        pupil_r = 30;                      /* dilated, surprised */
+        lid_top_y = EYE_CY - EYE_IRIS_R;  /* no upper lid */
+        lid_bot_y = EYE_CY + EYE_IRIS_R + 1; /* no lower lid */
         break;
+
+      case EYE_EXPR_HAPPY:
+        pupil_r = EYE_PUPIL_R;
+        lid_top_y = EYE_CY - 18;          /* upper lid pressed down */
+        lid_bot_y = EYE_CY + 18;          /* lower lid raised up */
+        break;                             /* → squinting happy strip */
 
       case EYE_EXPR_NEUTRAL:
       default:
         pupil_r = EYE_PUPIL_R;
-        lid_top_y = EYE_CY - EYE_IRIS_R; /* no eyelid */
+        lid_top_y = EYE_CY - EYE_IRIS_R;  /* no upper lid */
+        lid_bot_y = EYE_CY + EYE_IRIS_R + 1; /* no lower lid */
         break;
     }
 
-  eye_compose_full(gaze_dx, pupil_r, lid_top_y);
+  eye_compose_full(gaze_dx, pupil_r, lid_top_y, lid_bot_y);
 }
 
 /****************************************************************************
@@ -5387,7 +5401,7 @@ int bk7258_lcdtest_main(int argc, char *argv[])
     {
       int expr = (argc > 2) ? atoi(argv[2]) : -1;
 
-      if (expr >= 0 && expr <= EYE_EXPR_WAKE)
+      if (expr >= 0 && expr <= EYE_EXPR_HAPPY)
         {
           bk7258_lcd_eye_expr(0, expr, 0);
           bk7258_lcd_eye_expr(1, expr, 0);
@@ -5395,7 +5409,7 @@ int bk7258_lcdtest_main(int argc, char *argv[])
           return 0;
         }
 
-      /* Demo sequence: NEUTRAL → SLEEPY → WAKE → NEUTRAL + blink */
+      /* Demo sequence: NEUTRAL → SLEEPY → WAKE → HAPPY → NEUTRAL + blink */
 
       syslog(LOG_INFO, "[expr] demo start\n");
 
@@ -5409,6 +5423,10 @@ int bk7258_lcdtest_main(int argc, char *argv[])
 
       bk7258_lcd_eye_expr(0, EYE_EXPR_WAKE, 0);
       bk7258_lcd_eye_expr(1, EYE_EXPR_WAKE, 0);
+      usleep(500000);
+
+      bk7258_lcd_eye_expr(0, EYE_EXPR_HAPPY, 0);
+      bk7258_lcd_eye_expr(1, EYE_EXPR_HAPPY, 0);
       usleep(500000);
 
       bk7258_lcd_eye_expr(0, EYE_EXPR_NEUTRAL, 0);

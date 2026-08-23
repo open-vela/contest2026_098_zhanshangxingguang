@@ -5797,6 +5797,7 @@ enum
   EYE_EXPR_NEUTRAL = 0,
   EYE_EXPR_SLEEPY,
   EYE_EXPR_WAKE,
+  EYE_EXPR_HAPPY,
 };
 
 /****************************************************************************
@@ -5807,6 +5808,10 @@ enum
 #define VP_NOFACE_TO_SLEEP    40   /* consecutive no-face frames before SLEEP */
 #define VP_BLINK_TRACK        50   /* TRACK state blink period (frames) */
 #define VP_BLINK_SLEEP        100  /* SLEEP state slow blink period (frames) */
+#define VP_HAPPY_HOLD         15   /* happy expression hold frames ~1s */
+#define VP_HAPPY_BLOB         800  /* blob_hits above this = face close enough */
+#define VP_HAPPY_GAZE         6    /* |gaze| below this = face centered */
+#define VP_HAPPY_COOLDOWN     150  /* cooldown frames after happy, prevent spam */
 
 /****************************************************************************
  * Name: bk7258_camera_velapet
@@ -5823,7 +5828,7 @@ enum
 
 int bk7258_camera_velapet(void)
 {
-  enum { VP_SLEEP, VP_WAKE, VP_TRACK };
+  enum { VP_SLEEP, VP_WAKE, VP_TRACK, VP_HAPPY };
 
   struct cam_dir_s dir;
   int ret;
@@ -5836,6 +5841,8 @@ int bk7258_camera_velapet(void)
   int wake_ctr = 0;
   int noface_ctr = 0;
   int blink_ctr = 0;
+  int happy_ctr = 0;   /* VP_HAPPY state frame counter */
+  int happy_cd = 0;    /* VP_HAPPY cooldown counter */
 
   /* Gaze state — identical to bk7258_camera_track */
 
@@ -5984,6 +5991,7 @@ int bk7258_camera_velapet(void)
 
       face = dir.valid;
       blink_ctr++;
+      if (happy_cd > 0) happy_cd--;
 
       switch (state)
         {
@@ -6134,6 +6142,27 @@ int bk7258_camera_velapet(void)
               {
                 VP_RENDER_BLINK();
                 blink_ctr = 0;
+              }
+
+            /* Happy trigger: face close + centered */
+
+            if (dir.valid && dir.blob_hits > VP_HAPPY_BLOB &&
+                abs(new_gaze) < VP_HAPPY_GAZE && happy_cd == 0)
+              {
+                state = VP_HAPPY;
+                happy_ctr = 0;
+                VP_RENDER_EXPR(EYE_EXPR_HAPPY);
+              }
+            break;
+
+          case VP_HAPPY:
+            happy_ctr++;
+            if (happy_ctr >= VP_HAPPY_HOLD)
+              {
+                state = VP_TRACK;
+                happy_cd = VP_HAPPY_COOLDOWN;
+                last_gaze = 0;
+                VP_RENDER_EXPR(EYE_EXPR_NEUTRAL);
               }
             break;
         }
