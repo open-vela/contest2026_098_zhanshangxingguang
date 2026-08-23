@@ -2569,21 +2569,19 @@ void bk7258_lcd_eye_gaze(int panel, int old_dx, int new_dx)
 
 static void eye_blink(int gaze_dx)
 {
-  int pcx = EYE_CX + gaze_dx;
-
   syslog(LOG_INFO, "[eye] blink (gaze_dx=%d)\n", gaze_dx);
 
-  /* Close: black over iris area */
+  /* Closed eye: lid pushed below iris → entire iris disc goes black.
+   * Uses eye_compose_full rasterization — same boundary as open eye,
+   * pixel-perfect, no residual ring, single-window stream.
+   */
 
-  lcd_fill_circle(EYE_CX, EYE_CY, EYE_IRIS_R, 0x0000);
+  eye_compose_full(gaze_dx, EYE_PUPIL_R, EYE_CY + EYE_IRIS_R + 1);
   up_mdelay(120);
 
-  /* Open: iris -> pupil -> highlight (layered, no white dots) */
+  /* Open eye: normal, no eyelid */
 
-  lcd_fill_circle(EYE_CX, EYE_CY, EYE_IRIS_R, 0x07ff);
-  lcd_fill_circle(pcx, EYE_CY, EYE_PUPIL_R, 0x0000);
-  lcd_fill_circle(pcx - 8, EYE_CY - 10,
-                  EYE_HIGHLIGHT_R, 0xffff);
+  eye_compose_full(gaze_dx, EYE_PUPIL_R, EYE_CY - EYE_IRIS_R);
 }
 
 /****************************************************************************
