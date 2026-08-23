@@ -58,6 +58,8 @@ int main(int argc, char *argv[])
              " (default 1 frame)\n");
       printf("  track [n] [inv] — skin gaze tracking"
              " (n=100 default, n=0 continuous, inv=1/0)\n");
+      printf("  velapet — emotion engine"
+             " (sleep/wake/track + blink), Enter to stop\n");
       return 1;
     }
 
@@ -138,6 +140,10 @@ int main(int argc, char *argv[])
       if (argc >= 3) n = atoi(argv[2]);
       if (argc >= 4) inv = atoi(argv[3]);
       return bk7258_camera_track(n, inv);
+    }
+  else if (strcmp(argv[1], "velapet") == 0)
+    {
+      return bk7258_camera_velapet();
     }
   else
     {

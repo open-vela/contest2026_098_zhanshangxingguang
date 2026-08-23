@@ -385,6 +385,8 @@ extern void bk7258_lcd_blit_rgb565(int panel,
 extern void bk7258_lcd_eye_draw(int panel, int gaze_dx);
 extern void bk7258_lcd_eye_gaze(int panel,
                                  int old_dx, int new_dx);
+extern void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx);
+extern void bk7258_lcd_eye_blink(int panel, int gaze_dx);
 
 /* DVP controller state - saved before dvp_ctrl_config(), restored by
  * dvp_ctrl_deconfig().  Only field-level RMW on shared registers.
@@ -5776,6 +5778,400 @@ stop_stream:
          captured,
          (unsigned long)g_pingpong_count,
          (unsigned long)g_drop_count);
+
+  return ret;
+
+cleanup_irq:
+  dvp_irq_detach();
+cleanup_ctrl:
+  dvp_ctrl_deconfig();
+  return ret;
+}
+
+/****************************************************************************
+ * VelaPet expression enum (mirrors bk7258_camera.h)
+ ****************************************************************************/
+
+enum
+{
+  EYE_EXPR_NEUTRAL = 0,
+  EYE_EXPR_SLEEPY,
+  EYE_EXPR_WAKE,
+};
+
+/****************************************************************************
+ * VelaPet emotion engine constants
+ ****************************************************************************/
+
+#define VP_WAKE_FRAMES        6    /* surprised (dilated pupil) hold frames ~0.4s */
+#define VP_NOFACE_TO_SLEEP    40   /* consecutive no-face frames before SLEEP */
+#define VP_BLINK_TRACK        50   /* TRACK state blink period (frames) */
+#define VP_BLINK_SLEEP        100  /* SLEEP state slow blink period (frames) */
+
+/****************************************************************************
+ * Name: bk7258_camera_velapet
+ *
+ * Description:
+ *   VelaPet emotion engine main loop.
+ *   States: SLEEP (sleepy eyes, slow blink) → WAKE (surprised, dilated)
+ *   → TRACK (gaze following + periodic blink).  Returns to SLEEP after
+ *   prolonged absence of face.
+ *
+ *   Continuous mode: runs until Enter is pressed.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_velapet(void)
+{
+  enum { VP_SLEEP, VP_WAKE, VP_TRACK };
+
+  struct cam_dir_s dir;
+  int ret;
+  int timeout_ms;
+  int stdin_flags = 0;
+
+  /* Emotion state */
+
+  int state = VP_SLEEP;
+  int wake_ctr = 0;
+  int noface_ctr = 0;
+  int blink_ctr = 0;
+
+  /* Gaze state — identical to bk7258_camera_track */
+
+  int dx_baseline = 0;
+  bool baseline_init = false;
+  int smooth = 0;
+  int last_gaze = 0;
+  int dx_span_pos = TRACK_SPAN_MIN;
+  int dx_span_neg = TRACK_SPAN_MIN;
+  int miss_count = 0;
+
+  /* Macros: all LCD redraws wrapped in DVP IRQ mask */
+
+#define VP_RENDER_EXPR(expr) do { \
+    up_disable_irq(BK7258_IRQ_YUV_BUF); \
+    bk7258_lcd_eye_expr(0, (expr), last_gaze); \
+    bk7258_lcd_eye_expr(1, (expr), last_gaze); \
+    up_enable_irq(BK7258_IRQ_YUV_BUF); \
+  } while (0)
+
+#define VP_RENDER_BLINK() do { \
+    up_disable_irq(BK7258_IRQ_YUV_BUF); \
+    bk7258_lcd_eye_blink(0, last_gaze); \
+    bk7258_lcd_eye_blink(1, last_gaze); \
+    up_enable_irq(BK7258_IRQ_YUV_BUF); \
+  } while (0)
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR, "[velapet] DVP pins not configured\n");
+      return -ENODEV;
+    }
+
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR, "[velapet] frame buffers not allocated\n");
+      return -ENOMEM;
+    }
+
+  /* Start DVP streaming */
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0) goto cleanup_ctrl;
+
+  ret = dvp_irq_attach();
+  if (ret < 0) goto cleanup_irq;
+
+  g_dvp_vsync_count = 0;
+  g_dvp_frame_count = 0;
+  g_pingpong_count  = 0;
+  g_drop_count      = 0;
+  g_cur_buf         = 0;
+  g_ready_buf       = -1;
+  g_busy_buf        = -1;
+  g_stream_active   = true;
+
+  /* Initialize LCD */
+
+  ret = bk7258_lcd_preview_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[velapet] LCD init failed: %d\n", ret);
+      goto stop_stream;
+    }
+
+  syslog(LOG_INFO,
+         "[velapet] start: press Enter to stop, "
+         "Cr>=%d, gaze_max=%d\n",
+         SKIN_CR_LO, TRACK_GAZE_MAX);
+
+  /* Warm-up: discard first 20 frames (AE/AWB convergence) */
+
+  for (int i = 0; i < 20; i++)
+    {
+      uint32_t frame_addr;
+
+      timeout_ms = 1000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr != 0) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR,
+                 "[velapet] TIMEOUT warm-up frame %d\n", i);
+          ret = -ETIMEDOUT;
+          goto stop_lcd;
+        }
+
+      dvp_frame_put();
+    }
+
+  /* Initial expression: sleepy */
+
+  VP_RENDER_EXPR(EYE_EXPR_SLEEPY);
+
+  /* Non-blocking stdin */
+
+  stdin_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  fcntl(STDIN_FILENO, F_SETFL, stdin_flags | O_NONBLOCK);
+
+  /* Main loop */
+
+  while (true)
+    {
+      uint32_t frame_addr;
+      int raw_dx;
+      int new_gaze;
+      bool face;
+
+      /* Check for Enter keypress */
+
+      {
+        char ch;
+        if (read(STDIN_FILENO, &ch, 1) > 0)
+          {
+            break;
+          }
+      }
+
+      /* Grab frame */
+
+      timeout_ms = 5000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr != 0) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR, "[velapet] TIMEOUT frame\n");
+          ret = -ETIMEDOUT;
+          break;
+        }
+
+      camera_detect_frame(
+        (const uint8_t *)(uintptr_t)frame_addr, &dir);
+      dvp_frame_put();
+
+      face = dir.valid;
+      blink_ctr++;
+
+      switch (state)
+        {
+          case VP_SLEEP:
+            if (face)
+              {
+                state = VP_WAKE;
+                wake_ctr = 0;
+                VP_RENDER_EXPR(EYE_EXPR_WAKE);
+              }
+            else if (blink_ctr >= VP_BLINK_SLEEP)
+              {
+                VP_RENDER_BLINK();
+                VP_RENDER_EXPR(EYE_EXPR_SLEEPY);
+                blink_ctr = 0;
+              }
+            break;
+
+          case VP_WAKE:
+            wake_ctr++;
+            if (wake_ctr >= VP_WAKE_FRAMES)
+              {
+                state = VP_TRACK;
+                baseline_init = false;
+                smooth = 0;
+                last_gaze = 0;
+                dx_span_pos = TRACK_SPAN_MIN;
+                dx_span_neg = TRACK_SPAN_MIN;
+                miss_count = 0;
+                VP_RENDER_EXPR(EYE_EXPR_NEUTRAL);
+                blink_ctr = 0;
+              }
+            break;
+
+          case VP_TRACK:
+            if (!face)
+              {
+                noface_ctr++;
+                if (noface_ctr >= VP_NOFACE_TO_SLEEP)
+                  {
+                    state = VP_SLEEP;
+                    blink_ctr = 0;
+                    VP_RENDER_EXPR(EYE_EXPR_SLEEPY);
+                    break;
+                  }
+              }
+            else
+              {
+                noface_ctr = 0;
+              }
+
+            /* Gaze computation — identical to bk7258_camera_track */
+
+            if (!dir.valid)
+              {
+                miss_count++;
+
+                if (miss_count >= TRACK_MISS_TO_CENTER)
+                  {
+                    raw_dx = 0;
+                  }
+                else
+                  {
+                    raw_dx = smooth;
+                  }
+              }
+            else
+              {
+                int d = dir.dx;  /* invert=1 default */
+
+                miss_count = 0;
+
+                if (!baseline_init)
+                  {
+                    dx_baseline = d;
+                    baseline_init = true;
+                  }
+
+                dx_baseline = (dx_baseline * 31 + d) / 32;
+                raw_dx = d - dx_baseline;
+              }
+
+            /* EMA smoothing */
+
+            smooth = (smooth * TRACK_EMA_WEIGHT + raw_dx)
+                     / (TRACK_EMA_WEIGHT + 1);
+
+            /* Per-side auto-range */
+
+            if (smooth >= 0)
+              {
+                if (smooth > dx_span_pos)
+                  {
+                    dx_span_pos = smooth;
+                  }
+                else
+                  {
+                    dx_span_pos = (dx_span_pos * 63 +
+                                   TRACK_SPAN_MIN) / 64;
+                  }
+
+                new_gaze = smooth * TRACK_GAZE_MAX / dx_span_pos;
+              }
+            else
+              {
+                int m = -smooth;
+
+                if (m > dx_span_neg)
+                  {
+                    dx_span_neg = m;
+                  }
+                else
+                  {
+                    dx_span_neg = (dx_span_neg * 63 +
+                                   TRACK_SPAN_MIN) / 64;
+                  }
+
+                new_gaze = smooth * TRACK_GAZE_MAX / dx_span_neg;
+              }
+
+            /* Clamp */
+
+            if (new_gaze < -TRACK_GAZE_MAX)
+              {
+                new_gaze = -TRACK_GAZE_MAX;
+              }
+
+            if (new_gaze > TRACK_GAZE_MAX)
+              {
+                new_gaze = TRACK_GAZE_MAX;
+              }
+
+            /* Gaze update with dead zone */
+
+            if (new_gaze != last_gaze &&
+                abs(new_gaze - last_gaze) >= 3)
+              {
+                up_disable_irq(BK7258_IRQ_YUV_BUF);
+                bk7258_lcd_eye_gaze(0, last_gaze, new_gaze);
+                bk7258_lcd_eye_gaze(1, last_gaze, new_gaze);
+                up_enable_irq(BK7258_IRQ_YUV_BUF);
+                last_gaze = new_gaze;
+              }
+
+            /* Periodic blink */
+
+            if (blink_ctr >= VP_BLINK_TRACK)
+              {
+                VP_RENDER_BLINK();
+                blink_ctr = 0;
+              }
+            break;
+        }
+    }
+
+  /* Restore stdin */
+
+  fcntl(STDIN_FILENO, F_SETFL, stdin_flags);
+
+  /* Return eyes to neutral */
+
+  VP_RENDER_EXPR(EYE_EXPR_NEUTRAL);
+
+  if (last_gaze != 0)
+    {
+      up_disable_irq(BK7258_IRQ_YUV_BUF);
+      bk7258_lcd_eye_gaze(0, last_gaze, 0);
+      bk7258_lcd_eye_gaze(1, last_gaze, 0);
+      up_enable_irq(BK7258_IRQ_YUV_BUF);
+    }
+
+  ret = 0;
+
+stop_lcd:
+  bk7258_lcd_preview_deinit();
+
+stop_stream:
+  g_stream_active = false;
+  dvp_irq_detach();
+  dvp_ctrl_deconfig();
+
+  syslog(LOG_INFO,
+         "[velapet] done: pingpong=%lu  drop=%lu\n",
+         (unsigned long)g_pingpong_count,
+         (unsigned long)g_drop_count);
+
+#undef VP_RENDER_EXPR
+#undef VP_RENDER_BLINK
 
   return ret;
 
