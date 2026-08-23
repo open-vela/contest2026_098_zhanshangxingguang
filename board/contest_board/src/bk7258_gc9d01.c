@@ -2400,6 +2400,116 @@ static void eye_move_pupil(int old_dx, int new_dx)
 }
 
 /****************************************************************************
+ * Name: eye_compose_full
+ *
+ * Description:
+ *   Full-eye single-window stream render.  Composites iris, pupil,
+ *   highlight, and optional upper eyelid into a RAM buffer, then
+ *   blasts it to the LCD in one CASET/RASET/RAMWR sequence.
+ *
+ *   Priority: highlight(white) > eyelid(black) > pupil(black) >
+ *             iris(cyan) > background(black).
+ *
+ ****************************************************************************/
+
+static void eye_compose_full(int gaze_dx, int pupil_r,
+                              int lid_top_y)
+{
+  static uint8_t buf[120 * 120 * 2]; /* ~28 KB, covers full iris */
+  int pcx = EYE_CX + gaze_dx;
+  int hx = pcx - 8;
+  int hy = EYE_CY - 10;
+  int x0 = EYE_CX - EYE_IRIS_R;
+  int x1 = EYE_CX + EYE_IRIS_R;
+  int y0 = EYE_CY - EYE_IRIS_R;
+  int y1 = EYE_CY + EYE_IRIS_R;
+  int w;
+  int h;
+  int x;
+  int y;
+  int idx;
+  int ir2 = EYE_IRIS_R * EYE_IRIS_R;
+  int pr2 = pupil_r * pupil_r;
+  int hr2 = EYE_HIGHLIGHT_R * EYE_HIGHLIGHT_R;
+  uint8_t ca[4];
+  uint8_t ra[4];
+
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > LCD_WIDTH  - 1) x1 = LCD_WIDTH  - 1;
+  if (y1 > LCD_HEIGHT - 1) y1 = LCD_HEIGHT - 1;
+
+  w = x1 - x0 + 1;
+  h = y1 - y0 + 1;
+  if (w <= 0 || h <= 0 || w * h * 2 > (int)sizeof(buf)) return;
+
+  idx = 0;
+  for (y = y0; y <= y1; y++)
+    {
+      int dyi = y - EYE_CY;
+      int dyh = y - hy;
+      int dyp = y - EYE_CY;
+
+      for (x = x0; x <= x1; x++)
+        {
+          int dxi = x - EYE_CX;
+          int dxh = x - hx;
+          int dxp = x - pcx;
+          uint16_t c;
+
+          if (dxi * dxi + dyi * dyi > ir2)
+            {
+              /* Outside iris: background black */
+
+              c = 0x0000;
+            }
+          else if (y < lid_top_y)
+            {
+              /* Upper eyelid: black */
+
+              c = 0x0000;
+            }
+          else if (dxh * dxh + dyh * dyh <= hr2)
+            {
+              /* Highlight: white */
+
+              c = 0xffff;
+            }
+          else if (dxp * dxp + dyp * dyp <= pr2)
+            {
+              /* Pupil: black */
+
+              c = 0x0000;
+            }
+          else
+            {
+              /* Iris: cyan */
+
+              c = 0x07ff;
+            }
+
+          buf[idx++] = (uint8_t)((c >> 8) & 0xff);
+          buf[idx++] = (uint8_t)(c & 0xff);
+        }
+    }
+
+  ca[0] = (uint8_t)((x0 >> 8) & 0xff);
+  ca[1] = (uint8_t)(x0 & 0xff);
+  ca[2] = (uint8_t)((x1 >> 8) & 0xff);
+  ca[3] = (uint8_t)(x1 & 0xff);
+  lcd_send_cmd_data(0x2a, ca, 4);
+
+  ra[0] = (uint8_t)((y0 >> 8) & 0xff);
+  ra[1] = (uint8_t)(y0 & 0xff);
+  ra[2] = (uint8_t)((y1 >> 8) & 0xff);
+  ra[3] = (uint8_t)(y1 & 0xff);
+  lcd_send_cmd_data(0x2b, ra, 4);
+
+  lcd_send_cmd(0x2c);
+  lcd_send_data(buf, w * h * 2);
+}
+
+/****************************************************************************
  * Name: bk7258_lcd_eye_draw
  *
  * Description:
@@ -2474,6 +2584,86 @@ static void eye_blink(int gaze_dx)
   lcd_fill_circle(pcx, EYE_CY, EYE_PUPIL_R, 0x0000);
   lcd_fill_circle(pcx - 8, EYE_CY - 10,
                   EYE_HIGHLIGHT_R, 0xffff);
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_eye_expr
+ *
+ * Description:
+ *   Draw a full eye with expression on the specified panel.
+ *   Uses single-window stream rendering (eye_compose_full).
+ *
+ *   EYE_EXPR_NEUTRAL: normal eye, pupil r=22, no eyelid
+ *   EYE_EXPR_SLEEPY:  half-closed, pupil r=22, lid at EYE_CY
+ *   EYE_EXPR_WAKE:    surprised, pupil r=30, no eyelid
+ *
+ ****************************************************************************/
+
+void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx)
+{
+  int pupil_r;
+  int lid_top_y;
+
+  /* Switch panel */
+
+  if (panel == 1 && g_active_pins != &g_lcd_right)
+    {
+      lcd_set_pins(&g_lcd_right);
+      lcd_setup_pins(&g_lcd_right);
+    }
+  else if (panel != 1 && g_active_pins != &g_lcd_left)
+    {
+      lcd_set_pins(&g_lcd_left);
+      lcd_setup_pins(&g_lcd_left);
+    }
+
+  /* Map expression to parameters */
+
+  switch (expr)
+    {
+      case EYE_EXPR_SLEEPY:
+        pupil_r = EYE_PUPIL_R;
+        lid_top_y = EYE_CY;         /* upper half covered */
+        break;
+
+      case EYE_EXPR_WAKE:
+        pupil_r = 30;               /* dilated, surprised */
+        lid_top_y = EYE_CY - EYE_IRIS_R; /* no eyelid */
+        break;
+
+      case EYE_EXPR_NEUTRAL:
+      default:
+        pupil_r = EYE_PUPIL_R;
+        lid_top_y = EYE_CY - EYE_IRIS_R; /* no eyelid */
+        break;
+    }
+
+  eye_compose_full(gaze_dx, pupil_r, lid_top_y);
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_eye_blink
+ *
+ * Description:
+ *   Blink animation on the specified panel.
+ *   Wrapper that handles panel switching, then calls eye_blink().
+ *
+ ****************************************************************************/
+
+void bk7258_lcd_eye_blink(int panel, int gaze_dx)
+{
+  if (panel == 1 && g_active_pins != &g_lcd_right)
+    {
+      lcd_set_pins(&g_lcd_right);
+      lcd_setup_pins(&g_lcd_right);
+    }
+  else if (panel != 1 && g_active_pins != &g_lcd_left)
+    {
+      lcd_set_pins(&g_lcd_left);
+      lcd_setup_pins(&g_lcd_left);
+    }
+
+  eye_blink(gaze_dx);
 }
 
 /****************************************************************************
@@ -5193,6 +5383,45 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "emo") == 0)
     {
       return lcdtest_emo();
+    }
+
+  if (argc > 1 && strcmp(argv[1], "expr") == 0)
+    {
+      int expr = (argc > 2) ? atoi(argv[2]) : -1;
+
+      if (expr >= 0 && expr <= EYE_EXPR_WAKE)
+        {
+          bk7258_lcd_eye_expr(0, expr, 0);
+          bk7258_lcd_eye_expr(1, expr, 0);
+          syslog(LOG_INFO, "[expr] panel 0+1 expr=%d done\n", expr);
+          return 0;
+        }
+
+      /* Demo sequence: NEUTRAL → SLEEPY → WAKE → NEUTRAL + blink */
+
+      syslog(LOG_INFO, "[expr] demo start\n");
+
+      bk7258_lcd_eye_expr(0, EYE_EXPR_NEUTRAL, 0);
+      bk7258_lcd_eye_expr(1, EYE_EXPR_NEUTRAL, 0);
+      usleep(500000);
+
+      bk7258_lcd_eye_expr(0, EYE_EXPR_SLEEPY, 0);
+      bk7258_lcd_eye_expr(1, EYE_EXPR_SLEEPY, 0);
+      usleep(500000);
+
+      bk7258_lcd_eye_expr(0, EYE_EXPR_WAKE, 0);
+      bk7258_lcd_eye_expr(1, EYE_EXPR_WAKE, 0);
+      usleep(500000);
+
+      bk7258_lcd_eye_expr(0, EYE_EXPR_NEUTRAL, 0);
+      bk7258_lcd_eye_expr(1, EYE_EXPR_NEUTRAL, 0);
+      usleep(300000);
+
+      bk7258_lcd_eye_blink(0, 0);
+      bk7258_lcd_eye_blink(1, 0);
+
+      syslog(LOG_INFO, "[expr] demo done\n");
+      return 0;
     }
 
   if (argc > 1 && strcmp(argv[1], "oeye") == 0)
