@@ -166,6 +166,17 @@ void bk7258_lcd_blit_rgb565(int panel,
                              const uint8_t *rgb565);
 void bk7258_lcd_eye_draw(int panel, int gaze_dx);
 void bk7258_lcd_eye_gaze(int panel, int old_dx, int new_dx);
+
+enum
+{
+  EYE_EXPR_NEUTRAL = 0,
+  EYE_EXPR_SLEEPY,
+  EYE_EXPR_WAKE,
+};
+
+void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx);
+void bk7258_lcd_eye_blink(int panel, int gaze_dx);
+
 int bk7258_lcd_preview_init(void);
 void bk7258_lcd_preview_deinit(void);
 
