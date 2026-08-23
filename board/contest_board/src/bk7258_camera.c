@@ -6052,7 +6052,7 @@ int bk7258_camera_velapet(void)
               }
             else
               {
-                int d = dir.dx;  /* invert=1 default */
+                int d = -dir.dx;  /* invert=1: mirror-correct "look toward you" */
 
                 miss_count = 0;
 
