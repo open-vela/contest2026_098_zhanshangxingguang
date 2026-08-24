@@ -5813,6 +5813,13 @@ enum
 #define VP_HAPPY_GAZE         6    /* |gaze| below this = face centered */
 #define VP_HAPPY_COOLDOWN     150  /* cooldown frames after happy, prevent spam */
 
+/* LED emotion indicators (schematic): LED1=P40=RED(1K), LED2=P41=GREEN(330R).
+ * Cathode-to-GND wiring → GPIO HIGH = LED ON, LOW = OFF.
+ * gpio_set_output_high()/gpio_drive_low() are file-static helpers above.
+ */
+#define VP_LED_RED_PIN        40
+#define VP_LED_GREEN_PIN      41
+
 /****************************************************************************
  * Name: bk7258_camera_velapet
  *
@@ -5868,6 +5875,16 @@ int bk7258_camera_velapet(void)
     bk7258_lcd_eye_blink(0, last_gaze); \
     bk7258_lcd_eye_blink(1, last_gaze); \
     up_enable_irq(BK7258_IRQ_YUV_BUF); \
+  } while (0)
+
+#define VP_LED_GREEN(on) do { \
+    if (on) gpio_set_output_high(VP_LED_GREEN_PIN); \
+    else    gpio_drive_low(VP_LED_GREEN_PIN); \
+  } while (0)
+
+#define VP_LED_RED(on) do { \
+    if (on) gpio_set_output_high(VP_LED_RED_PIN); \
+    else    gpio_drive_low(VP_LED_RED_PIN); \
   } while (0)
 
   if (!g_dvp_pins_configed)
@@ -5942,6 +5959,8 @@ int bk7258_camera_velapet(void)
   /* Initial expression: sleepy */
 
   VP_RENDER_EXPR(EYE_EXPR_SLEEPY);
+  VP_LED_GREEN(false);   /* SLEEP: both LEDs off */
+  VP_LED_RED(false);
 
   /* Non-blocking stdin */
 
@@ -6001,6 +6020,7 @@ int bk7258_camera_velapet(void)
                 state = VP_WAKE;
                 wake_ctr = 0;
                 VP_RENDER_EXPR(EYE_EXPR_WAKE);
+                VP_LED_GREEN(true);    /* awake indicator on */
               }
             else if (blink_ctr >= VP_BLINK_SLEEP)
               {
@@ -6035,6 +6055,8 @@ int bk7258_camera_velapet(void)
                     state = VP_SLEEP;
                     blink_ctr = 0;
                     VP_RENDER_EXPR(EYE_EXPR_SLEEPY);
+                    VP_LED_GREEN(false);   /* sleep: LEDs off */
+                    VP_LED_RED(false);
                     break;
                   }
               }
@@ -6152,6 +6174,7 @@ int bk7258_camera_velapet(void)
                 state = VP_HAPPY;
                 happy_ctr = 0;
                 VP_RENDER_EXPR(EYE_EXPR_HAPPY);
+                VP_LED_RED(true);      /* happy: red glow on */
               }
             break;
 
@@ -6163,6 +6186,7 @@ int bk7258_camera_velapet(void)
                 happy_cd = VP_HAPPY_COOLDOWN;
                 last_gaze = 0;
                 VP_RENDER_EXPR(EYE_EXPR_NEUTRAL);
+                VP_LED_RED(false);     /* happy done: red off */
               }
             break;
         }
@@ -6175,6 +6199,8 @@ int bk7258_camera_velapet(void)
   /* Return eyes to neutral */
 
   VP_RENDER_EXPR(EYE_EXPR_NEUTRAL);
+  VP_LED_GREEN(false);   /* exit: all LEDs off */
+  VP_LED_RED(false);
 
   if (last_gaze != 0)
     {
@@ -6201,6 +6227,8 @@ stop_stream:
 
 #undef VP_RENDER_EXPR
 #undef VP_RENDER_BLINK
+#undef VP_LED_GREEN
+#undef VP_LED_RED
 
   return ret;
 
