@@ -34,6 +34,7 @@ endif()
 
 list(APPEND SRCS bk7258_audio.c)
 list(APPEND SRCS bk7258_accel.c)
+list(APPEND SRCS bk7258_battery.c)
 
 target_sources(board PRIVATE ${SRCS})
 

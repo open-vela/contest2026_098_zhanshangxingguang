@@ -66,6 +66,7 @@
 #include "bk7258_gpio.h"
 #include "bk7258_audio.h"
 #include "bk7258_accel.h"
+#include "bk7258_battery.h"
 #include "bk7258_psram.h"
 
 #ifdef CONFIG_EXAMPLES_GC2145_ID
@@ -5564,6 +5565,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "accel") == 0)
     {
       return bk7258_accel_main(argc - 1, &argv[1]);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "bat") == 0)
+    {
+      return bk7258_battery_main(argc - 1, &argv[1]);
     }
 
   if (argc > 1 && strcmp(argv[1], "led") == 0)
