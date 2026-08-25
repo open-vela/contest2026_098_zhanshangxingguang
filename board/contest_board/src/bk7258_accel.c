@@ -238,8 +238,8 @@ static int accel_gesture_demo(uint8_t addr)
    */
 
   sc7_write_reg(addr, SC7_CLICK_CFG, 0x15);        /* single-click XYZ */
-  sc7_write_reg(addr, SC7_CLICK_THS, 0x80 | 0x0c); /* latch + ~190mg, 隔壳更灵敏 */
-  sc7_write_reg(addr, SC7_TIME_LIMIT, 0x18);       /* 放宽冲击时间窗 ~60ms */
+  sc7_write_reg(addr, SC7_CLICK_THS, 0x80 | 0x14);   /* ~310mg：只让尖锐敲击越过 */
+  sc7_write_reg(addr, SC7_TIME_LIMIT, 0x7f);   /* ~318ms：容忍晃动型敲击 */          /* ~100ms：容忍略长的敲击 */
   up_mdelay(20);
 
   stdin_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
@@ -337,8 +337,8 @@ int bk7258_accel_probe(void)
   sc7_write_reg(g_accel_addr, SC7_CTRL_REG1,  0x77);
   sc7_write_reg(g_accel_addr, SC7_CTRL_REG4,  0x08);
   sc7_write_reg(g_accel_addr, SC7_CLICK_CFG,  0x15);
-  sc7_write_reg(g_accel_addr, SC7_CLICK_THS,  0x80 | 0x0c);   /* ~190mg, 隔壳更灵敏 */
-  sc7_write_reg(g_accel_addr, SC7_TIME_LIMIT, 0x18);
+  sc7_write_reg(g_accel_addr, SC7_CLICK_THS,  0x80 | 0x14);   /* ~310mg：只让尖锐敲击越过 */
+  sc7_write_reg(g_accel_addr, SC7_TIME_LIMIT, 0x7f);   /* ~318ms：容忍晃动型敲击 */          /* ~100ms：容忍略长的敲击 */
   up_mdelay(20);
 
   syslog(LOG_INFO, "[accel] probe ok @0x%02x WHO=0x%02x\n", g_accel_addr, who);
