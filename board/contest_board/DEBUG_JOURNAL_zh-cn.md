@@ -2361,3 +2361,24 @@ DAC 寄存器回读全对、日志正常，但喇叭不响。翻原理图发现�
 - 回跟随 → 红灭绿留；离开 → 回困、双灯灭。
 - 调试工具留档：`lcdtest led [pin] [0/1]`(直接点灯/探引脚)、`lcdtest accel [n]`(读 XYZ)、`lcdtest accel g`(姿态/敲击 demo)。
 - 🟢 <span style="color:#1a7f37">**M3 收口：情绪触发三源(视觉人脸 + 运动拿起/摇一摇) + 三通道外化(眼睛表情 + 双色灯 + 扬声器)全部上板验证通过。**</span>
+
+## 32. 扬声器情绪音效（轮询播放，非 DMA）
+
+> 目标是"扬声器接进情绪引擎"。评估后**没走 DMA**，走轮询短音效，理由与实现记于此。
+> 相关代码：`src/bk7258_audio.c`（`audio_play_melody`）、`src/bk7258_audio.h`、`src/bk7258_camera.c`（velapet 状态跳变触发）。
+
+### 32.1 决策：轮询短音效 而非 DMA 连续播放
+- 调研结论：openvela 版固件里**没有任何通用 GDMA 驱动**（`arch/arm/src/bk7258/` 下无 dma 文件、无 `bk_dma_*`、相机 DVP 用的是专用 YUV_BUF 模块不可复用）。真上 DMA = 从 ARMino 手抄一个寄存器级 GDMA 通道驱动（基址 `0x45020000`、`req_mux=0xD` AUDIO、REPEAT/loop、完成中断、电源/时钟使能），工作量与相机 DVP 一个量级。
+- VelaPet 的实际音频需求只是**短促情绪提示音**（唤醒/开心各零点几秒），轮询播放足矣（`lcdtest beep` 已证明）。
+- 🟢 **决策：先做轮询音效**（当天可完成、demo 立竿见影），DMA 留到评审后或确需长音频/TTS 时再啃。
+
+### 32.2 实现
+- `audio_play_melody(freqs[], durs_ms[], n, pa_gpio)`：复用 beep 的 DAC 路径——`audio_dac_init(16k)` → 开 PA(P50) → 逐音符用"单周期正弦波表 + 取模"合成、轮询写 DAC FIFO → 补 256 静音 flush → 关 PA → `audio_dac_deinit()`。`freq=0` 为休止符。
+- velapet 挂接：用 `prev_state` 检测状态跳变，**统一在循环里**触发（覆盖人脸/拿起/摇一摇/脸近所有入口），不在各转移点分散加：
+  - 进 `WAKE` → `vp_wake`：880→1320Hz 上行"哔-嘟"（~200ms）；
+  - 进 `HAPPY` → `vp_happy`：G4→B4→E5 琶音（~340ms）。
+- 阻塞式：播放期间 velapet 主循环停 ~0.2–0.35s，眼睛定格在新表情，对"反应一下"可接受；实测播完跟随/检测正常恢复、无卡死、不影响其它行为。
+
+### 32.3 结果与后续
+- 🟢 <span style="color:#1a7f37">**扬声器接入情绪引擎：唤醒"哔-嘟"、开心琶音，声光眼三通道齐发。**</span>
+- 后续可选：① DMA 连续播放（长音频/背景音/TTS 前置，见 §32.1 的移植清单）；② 音效做成非阻塞（小缓冲 + 定时喂），避免播放期间画面定格。当前 demo 不需要。

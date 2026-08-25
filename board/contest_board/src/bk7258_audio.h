@@ -49,5 +49,7 @@ int  bk7258_mic_energy(int n);
 void audio_dac_init(int samp_rate);
 void audio_dac_deinit(void);
 int  audio_beep(int freq_hz, int ms, int pa_gpio);
+int  audio_play_melody(const uint16_t *freqs, const uint16_t *durs_ms,
+                       int n, int pa_gpio);
 
 #endif /* __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_AUDIO_H */
