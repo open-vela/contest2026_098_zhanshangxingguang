@@ -28,6 +28,9 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -56,6 +59,12 @@
 #define SC7_CTRL_REG4   0x23
 #define SC7_OUT_X_L     0x28
 #define SC7_AUTO_INC    0x80      /* sub-addr bit7: multi-byte auto-increment */
+
+#define SC7_CTRL_REG3   0x22
+#define SC7_CLICK_CFG   0x38
+#define SC7_CLICK_SRC   0x39
+#define SC7_CLICK_THS   0x3a
+#define SC7_TIME_LIMIT  0x3b
 
 /****************************************************************************
  * GPIO open-drain helpers (self-contained, no camera.c dependency)
@@ -209,13 +218,169 @@ static int sc7_read_regs(uint8_t addr, uint8_t reg, uint8_t *buf, int n)
 }
 
 /****************************************************************************
+ * Name: accel_gesture_demo
+ *   Continuous loop: hardware single-click "tap" + gravity-vector "pickup".
+ *   Runs until Enter.  Foundation for velapet gesture->emotion hookup.
+ ****************************************************************************/
+
+static int accel_gesture_demo(uint8_t addr)
+{
+  int stdin_flags;
+  bool was_flat = true;
+
+  /* 400 Hz (reliable click), XYZ enable; ±2g high-res */
+
+  sc7_write_reg(addr, SC7_CTRL_REG1, 0x77);
+  sc7_write_reg(addr, SC7_CTRL_REG4, 0x08);
+
+  /* Click engine: single-click on X/Y/Z, latched, threshold + time window.
+   * CLICK_THS bit7=LIR (latch until CLICK_SRC read).  Tune 0x20 if needed.
+   */
+
+  sc7_write_reg(addr, SC7_CLICK_CFG, 0x15);        /* single-click XYZ */
+  sc7_write_reg(addr, SC7_CLICK_THS, 0x80 | 0x0c); /* latch + ~190mg, 隔壳更灵敏 */
+  sc7_write_reg(addr, SC7_TIME_LIMIT, 0x18);       /* 放宽冲击时间窗 ~60ms */
+  up_mdelay(20);
+
+  stdin_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  fcntl(STDIN_FILENO, F_SETFL, stdin_flags | O_NONBLOCK);
+
+  syslog(LOG_INFO,
+         "[accel] gesture demo: TAP the board / PICK it up; press Enter to stop\n");
+
+  while (true)
+    {
+      uint8_t buf[6];
+      uint8_t src = 0;
+      char c;
+
+      if (read(STDIN_FILENO, &c, 1) == 1)
+        {
+          break;
+        }
+
+      /* --- Tap: hardware click engine (CLICK_SRC bit6 = IA) --- */
+
+      if (sc7_read_regs(addr, SC7_CLICK_SRC, &src, 1) == 0 && (src & 0x40))
+        {
+          const char *ax = (src & 0x01) ? "X" :
+                           (src & 0x02) ? "Y" :
+                           (src & 0x04) ? "Z" : "?";
+          syslog(LOG_INFO, "[accel] TAP! axis=%s src=0x%02x\n", ax, src);
+        }
+
+      /* --- Pickup: gravity vector leaves the flat pose --- */
+
+      if (sc7_read_regs(addr, SC7_OUT_X_L | SC7_AUTO_INC, buf, 6) == 0)
+        {
+          int x = (int16_t)((buf[1] << 8) | buf[0]) >> 4;
+          int y = (int16_t)((buf[3] << 8) | buf[2]) >> 4;
+          int z = (int16_t)((buf[5] << 8) | buf[4]) >> 4;
+          bool flat = (abs(z) > 800 && abs(x) < 350 && abs(y) < 350);
+
+          if (was_flat && !flat)
+            {
+              syslog(LOG_INFO, "[accel] PICKUP  (x=%d y=%d z=%d)\n", x, y, z);
+            }
+          else if (!was_flat && flat)
+            {
+              syslog(LOG_INFO, "[accel] PUT DOWN (flat)\n");
+            }
+
+          was_flat = flat;
+        }
+
+      up_mdelay(30);
+    }
+
+  fcntl(STDIN_FILENO, F_SETFL, stdin_flags);
+  syslog(LOG_INFO, "[accel] gesture demo done\n");
+  return 0;
+}
+
+/****************************************************************************
+ * Embedded API (used by velapet gesture hookup) — persistent address
+ ****************************************************************************/
+
+static uint8_t g_accel_addr;
+
+int bk7258_accel_probe(void)
+{
+  uint8_t who = 0;
+  uint8_t cand[2] = { SC7_ADDR_HI, SC7_ADDR_LO };
+  int i;
+
+  g_accel_addr = 0;
+
+  accel_pin_gpio_mode(ACCEL_SCL_PIN);
+  accel_pin_gpio_mode(ACCEL_SDA_PIN);
+  pin_drive_high(ACCEL_SCL_PIN);
+  pin_release(ACCEL_SDA_PIN);
+  up_mdelay(5);
+
+  for (i = 0; i < 2; i++)
+    {
+      if (sc7_read_regs(cand[i], SC7_WHO_AM_I, &who, 1) == 0)
+        {
+          g_accel_addr = cand[i];
+          break;
+        }
+    }
+
+  if (g_accel_addr == 0)
+    {
+      return -1;
+    }
+
+  /* 400 Hz + ±2g HR; single-click XYZ, latched, ~310mg, ~60ms window */
+
+  sc7_write_reg(g_accel_addr, SC7_CTRL_REG1,  0x77);
+  sc7_write_reg(g_accel_addr, SC7_CTRL_REG4,  0x08);
+  sc7_write_reg(g_accel_addr, SC7_CLICK_CFG,  0x15);
+  sc7_write_reg(g_accel_addr, SC7_CLICK_THS,  0x80 | 0x0c);   /* ~190mg, 隔壳更灵敏 */
+  sc7_write_reg(g_accel_addr, SC7_TIME_LIMIT, 0x18);
+  up_mdelay(20);
+
+  syslog(LOG_INFO, "[accel] probe ok @0x%02x WHO=0x%02x\n", g_accel_addr, who);
+  return 0;
+}
+
+void bk7258_accel_sample(bool *tap, bool *flat)
+{
+  uint8_t src = 0;
+  uint8_t buf[6];
+
+  if (tap)  *tap  = false;
+  if (flat) *flat = true;
+  if (g_accel_addr == 0) return;
+
+  /* Tap: hardware click latch (CLICK_SRC bit6 = IA) */
+
+  if (sc7_read_regs(g_accel_addr, SC7_CLICK_SRC, &src, 1) == 0 && (src & 0x40))
+    {
+      if (tap) *tap = true;
+    }
+
+  /* Pose: gravity vector → flat or not */
+
+  if (sc7_read_regs(g_accel_addr, SC7_OUT_X_L | SC7_AUTO_INC, buf, 6) == 0)
+    {
+      int x = (int16_t)((buf[1] << 8) | buf[0]) >> 4;
+      int y = (int16_t)((buf[3] << 8) | buf[2]) >> 4;
+      int z = (int16_t)((buf[5] << 8) | buf[4]) >> 4;
+      if (flat) *flat = (abs(z) > 800 && abs(x) < 350 && abs(y) < 350);
+    }
+}
+
+/****************************************************************************
  * Name: bk7258_accel_main
  *   NSH: lcdtest accel [n]  — probe SC7A20H, read WHO_AM_I, stream XYZ.
  ****************************************************************************/
 
 int bk7258_accel_main(int argc, char *argv[])
 {
-  int n = (argc > 1) ? atoi(argv[1]) : 20;
+  bool gesture = (argc > 1 && strcmp(argv[1], "g") == 0);
+  int n = (!gesture && argc > 1) ? atoi(argv[1]) : 20;
   uint8_t addr = 0;
   uint8_t buf[6];
   uint8_t who = 0;
@@ -255,6 +420,11 @@ int bk7258_accel_main(int argc, char *argv[])
 
   syslog(LOG_INFO, "[accel] found at 0x%02x, WHO_AM_I=0x%02x (SC7A20 expect ~0x11)\n",
          addr, who);
+
+  if (gesture)
+    {
+      return accel_gesture_demo(addr);
+    }
 
   /* Wake: 100 Hz, XYZ enable, normal mode; ±2g, high-res 12-bit */
 

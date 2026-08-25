@@ -22,7 +22,11 @@
 #define __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_ACCEL_H
 
 #include <nuttx/config.h>
+#include <stdbool.h>
 
 int bk7258_accel_main(int argc, char *argv[]);
+
+int  bk7258_accel_probe(void);              /* init + find addr + config click */
+void bk7258_accel_sample(bool *tap, bool *flat);  /* one poll: tap event + flat pose */
 
 #endif /* __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_ACCEL_H */
