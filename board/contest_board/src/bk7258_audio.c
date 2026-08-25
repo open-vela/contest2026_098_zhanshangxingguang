@@ -745,6 +745,72 @@ int audio_beep(int freq_hz, int ms, int pa_gpio)
 }
 
 /****************************************************************************
+ * Name: audio_play_melody
+ *   Play a short note sequence (polling).  freqs[i]=0 → rest.
+ *   Reuses the beep DAC path; blocks for the total duration (~sum of durs).
+ *   For VelaPet emotion cues (wake/happy).  pa_gpio: HT6873 enable (P50).
+ ****************************************************************************/
+
+int audio_play_melody(const uint16_t *freqs, const uint16_t *durs_ms,
+                      int n, int pa_gpio)
+{
+  const int fs = 16000;
+  const int16_t amp = 8000;
+  static int16_t period[320];
+  int i;
+  long k;
+
+  audio_dac_init(fs);
+
+  if (pa_gpio >= 0)
+    {
+      pa_gpio_set(pa_gpio, 1);
+      up_mdelay(10);
+    }
+
+  for (i = 0; i < n; i++)
+    {
+      int f  = freqs[i];
+      int ms = durs_ms[i];
+      long total = (long)fs * ms / 1000;
+      int plen;
+
+      if (f <= 0)                       /* rest */
+        {
+          for (k = 0; k < total; k++) audio_dac_write(0);
+          continue;
+        }
+
+      if (f < 50)   f = 50;
+      if (f > 4000) f = 4000;
+      plen = fs / f;
+      if (plen < 4)   plen = 4;
+      if (plen > 320) plen = 320;
+
+      for (k = 0; k < plen; k++)
+        {
+          period[k] = (int16_t)((float)amp *
+                        sinf(2.0f * 3.1415926f * (float)k / (float)plen));
+        }
+
+      for (k = 0; k < total; k++)
+        {
+          audio_dac_write(period[k % plen]);
+        }
+    }
+
+  for (k = 0; k < 256; k++) audio_dac_write(0);   /* flush tail */
+
+  if (pa_gpio >= 0)
+    {
+      pa_gpio_set(pa_gpio, 0);
+    }
+
+  audio_dac_deinit();
+  return 0;
+}
+
+/****************************************************************************
  * Name: audio_capture
  *
  * Description:

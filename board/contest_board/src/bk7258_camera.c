@@ -68,6 +68,7 @@
 #include "bk7258_gpio.h"
 #include "bk7258_psram.h"
 #include "bk7258_accel.h"
+#include "bk7258_audio.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -5823,6 +5824,12 @@ enum
 #define VP_LED_RED_PIN        40
 #define VP_LED_GREEN_PIN      41
 
+/* Emotion sound cues (freq Hz / dur ms), played via polling DAC */
+static const uint16_t vp_wake_freq[]  = { 880, 1320 };        /* rising "boop-beep" */
+static const uint16_t vp_wake_dur[]   = {  80,  120 };
+static const uint16_t vp_happy_freq[] = { 784, 988, 1319 };   /* cheerful G-B-E arpeggio */
+static const uint16_t vp_happy_dur[]  = {  90,  90,  160 };
+
 /****************************************************************************
  * Name: vp_led_set
  *   Drive an emotion LED pin: set SYS func-select to GPIO (P40 powers up in
@@ -5884,6 +5891,7 @@ int bk7258_camera_velapet(void)
   int  nonflat_run = 0;            /* consecutive non-flat reads */
   int  accel_tick = 0;
   int  last_pickup_tick = -1000;
+  int  prev_state = -1;
 
   /* Gaze state — identical to bk7258_camera_track */
 
@@ -6277,6 +6285,22 @@ int bk7258_camera_velapet(void)
                 VP_LED_RED(false);     /* happy done: red off */
               }
             break;
+        }
+
+      /* Emotion sound on entering WAKE / HAPPY (blocks ~0.2-0.35s) */
+
+      if (state != prev_state)
+        {
+          if (state == VP_WAKE)
+            {
+              audio_play_melody(vp_wake_freq, vp_wake_dur, 2, 50);
+            }
+          else if (state == VP_HAPPY)
+            {
+              audio_play_melody(vp_happy_freq, vp_happy_dur, 3, 50);
+            }
+
+          prev_state = state;
         }
     }
 
