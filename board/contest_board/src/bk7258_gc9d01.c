@@ -5381,6 +5381,46 @@ static int lcdtest_burst(int argc, char *argv[])
   return 0;
 }
 
+static void lcdtest_led_set(int pin, int on)
+{
+  uintptr_t fn  = BK7258_SYS_GPIO_FUNC(pin);
+  uintptr_t cfg = BK7258_GPIO_CFG(pin);
+  uint32_t v;
+
+  /* SYS func-select -> GPIO (比情绪灯宏更彻底，排除引脚复用) */
+  v = getreg32(fn);
+  v &= ~(BK7258_GPIO_FUNC_MASK << BK7258_GPIO_FUNC_SHIFT(pin));
+  putreg32(v, fn);
+
+  v = getreg32(cfg);
+  v &= ~GPIO_CFG_SECOND_FUNC;   /* GPIO 模式 */
+  v &= ~GPIO_CFG_OUTPUT_EN;     /* 使能输出(低有效) */
+  if (on) v |= GPIO_CFG_OUTPUT; else v &= ~GPIO_CFG_OUTPUT;
+  putreg32(v, cfg);
+}
+
+static int lcdtest_led(int argc, char *argv[])
+{
+  if (argc > 3)   /* lcdtest led <pin> <0|1> */
+    {
+      int pin = atoi(argv[2]);
+      int on  = atoi(argv[3]);
+      lcdtest_led_set(pin, on);
+      syslog(LOG_INFO, "[led] P%d = %d\n", pin, on);
+      return 0;
+    }
+
+  syslog(LOG_INFO, "[led] P40 (RED) ON 1.5s\n");
+  lcdtest_led_set(40, 1); usleep(1500000); lcdtest_led_set(40, 0);
+  syslog(LOG_INFO, "[led] P41 (GREEN) ON 1.5s\n");
+  lcdtest_led_set(41, 1); usleep(1500000); lcdtest_led_set(41, 0);
+  syslog(LOG_INFO, "[led] BOTH ON 1.5s\n");
+  lcdtest_led_set(40, 1); lcdtest_led_set(41, 1); usleep(1500000);
+  lcdtest_led_set(40, 0); lcdtest_led_set(41, 0);
+  syslog(LOG_INFO, "[led] done\n");
+  return 0;
+}
+
 int bk7258_lcdtest_main(int argc, char *argv[])
 {
   if (argc > 1 && strcmp(argv[1], "go") == 0)
@@ -5524,6 +5564,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
   if (argc > 1 && strcmp(argv[1], "accel") == 0)
     {
       return bk7258_accel_main(argc - 1, &argv[1]);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "led") == 0)
+    {
+      return lcdtest_led(argc, argv);
     }
 
   if (argc > 1 && strcmp(argv[1], "one") == 0)
