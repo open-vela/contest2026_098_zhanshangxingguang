@@ -2305,3 +2305,30 @@ DAC 寄存器回读全对、日志正常，但喇叭不响。翻原理图发现�
 - 🟢 <span style="color:#1a7f37">**M3a 完成：`lcdtest accel` 稳定读出三轴（WHO_AM_I=0x11，平放 Z≈−1g，翻转变号）。**</span>
 - 朝向：芯片 **+Z 朝下**装（平放 Z≈−1g），手势判断按此朝向。
 - 下一步：`CLICK_CFG(0x38)` 敲击检测 + 拿起/翻转姿态判断 → 接入情绪引擎（拿起→惊喜、轻拍→开心）。
+
+## 30. M3c 手势接入情绪引擎（拿起→惊喜、轻拍→开心）
+
+> 把 SC7A20H 的敲击/姿态接进 `bk7258_camera_velapet`：轻拍→HAPPY、拿起(平放→抬起且当前 SLEEP)→WAKE。
+> 相关代码：`src/bk7258_accel.c`（导出 `bk7258_accel_probe/bk7258_accel_sample`）、`src/bk7258_camera.c`（velapet 主循环插入手势轮询）、`src/bk7258_accel.h`。
+
+### 30.1 结构
+- `bk7258_accel.c` 导出两个函数供 camera.c 用：`bk7258_accel_probe()`（初始化 + 扫地址 + 配 400Hz/±2g + click 引擎，地址存 `g_accel_addr`）、`bk7258_accel_sample(bool *tap, bool *flat)`（一次轮询：硬件 click latch 出 tap，重力矢量出 flat 姿态）。
+- velapet 主循环每 `VP_ACCEL_EVERY(5)` 帧调一次；轻拍任意态触发 HAPPY（复用现有 HAPPY 冷却），拿起仅在 SLEEP 触发 WAKE。
+
+### 30.2 踩坑（大坑）：并发把 I2C 读数搅乱 → 假 pickup 狂刷 + 假性"跟随失效"
+- **现象**：整合后 `camera velapet` 平放静止也反复 `pickup -> WAKE`，人脸跟随像坏了；但独立 `lcdtest accel g` 和纯 `camera track` 各自都好好的。
+- **根因**：加速度是**位操作 I2C（`up_udelay` 忙等）**，跑在 velapet 主循环里会被**相机 DVP 完成中断（YUV_BUF ISR）抢占**，偶发搅乱一次读数 → flat 误判 → 假 pickup。假 pickup 不停把状态机从 SLEEP 踢醒→WAKE→TRACK(无脸)→SLEEP，把真正的人脸跟随节奏冲掉，看起来像"跟随失效"（其实检测没坏——用 `camera track` 做对照一跑就证明了）。
+- 🟢 **修法(两道防线)**：
+  1. **采样期间 `up_disable_irq(BK7258_IRQ_YUV_BUF)`**（和 LCD 重绘同一套保护），~2ms/次、每 5 帧一次,不影响帧率；
+  2. **姿态去抖**：连续 ≥2 次非平放才算"抬起"（`nonflat_run`），滤掉偶发毛刺。
+- **效果**：静止时 `nf` 顶多跳到 1 就被挡回，`st` 稳在 0；真拿起时 `nf` 一路涨（3→9）才触发——真假分明。
+- **方法论**：可观测性救命。velapet 原来没有逐帧状态日志，全靠猜；临时加一行 `st/face/blob/gaze/lifted/nf` 周期日志后，"检测正常、是假 pickup 在捣乱"一眼看穿。**对照命令(`camera track` vs `camera velapet`)是隔离回归的利器。**
+
+### 30.3 踩坑（小）：装壳后敲击要很大力
+- 板子装进打印前壳后，外壳吸掉冲击，`CLICK_THS` 原值（~310mg）要重敲才触发。
+- 🟢 降到 `0x80|0x0c`（~190mg，latch）后隔壳轻拍即灵；放下冲击靠 `tap_guard`（放下后抑制 N 帧）挡掉误触。
+- 注意 click 阈值有**两处**要同步：`bk7258_accel_probe`(velapet 用) 和 `accel_gesture_demo`(lcdtest 用)。
+
+### 30.4 结果
+- 🟢 <span style="color:#1a7f37">**M3 完成：`camera velapet` 里 人脸跟随 + 拿起→惊喜 + 轻拍→开心 全部稳定；静止不误触、装壳轻拍即灵。**</span>
+- 至此情绪触发有三源：视觉(人脸远近/居中)、运动(拿起/轻拍)、（待接）语音命令词。

@@ -67,6 +67,7 @@
 
 #include "bk7258_gpio.h"
 #include "bk7258_psram.h"
+#include "bk7258_accel.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -5812,6 +5813,8 @@ enum
 #define VP_HAPPY_BLOB         800  /* blob_hits above this = face close enough */
 #define VP_HAPPY_GAZE         6    /* |gaze| below this = face centered */
 #define VP_HAPPY_COOLDOWN     150  /* cooldown frames after happy, prevent spam */
+#define VP_ACCEL_EVERY        5    /* poll accelerometer every N frames */
+#define VP_TAP_GUARD          4    /* suppress tap for N polls after putdown */
 
 /* LED emotion indicators (schematic): LED1=P40=RED(1K), LED2=P41=GREEN(330R).
  * Cathode-to-GND wiring → GPIO HIGH = LED ON, LOW = OFF.
@@ -5850,6 +5853,11 @@ int bk7258_camera_velapet(void)
   int blink_ctr = 0;
   int happy_ctr = 0;   /* VP_HAPPY state frame counter */
   int happy_cd = 0;    /* VP_HAPPY cooldown counter */
+  bool accel_ok = false;
+  int  accel_ctr = 0;
+  bool accel_was_lifted = false;   /* debounced pose: false=flat */
+  int  nonflat_run = 0;            /* consecutive non-flat reads */
+  int  tap_guard = 0;
 
   /* Gaze state — identical to bk7258_camera_track */
 
@@ -5967,6 +5975,9 @@ int bk7258_camera_velapet(void)
   stdin_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
   fcntl(STDIN_FILENO, F_SETFL, stdin_flags | O_NONBLOCK);
 
+  accel_ok = (bk7258_accel_probe() == 0);
+  syslog(LOG_INFO, "[velapet] accel %s\n", accel_ok ? "ready" : "absent");
+
   /* Main loop */
 
   while (true)
@@ -6011,6 +6022,75 @@ int bk7258_camera_velapet(void)
       face = dir.valid;
       blink_ctr++;
       if (happy_cd > 0) happy_cd--;
+
+      /* --- Accelerometer gestures: tap -> HAPPY, pickup -> WAKE --- */
+
+      if (accel_ok && (++accel_ctr >= VP_ACCEL_EVERY))
+        {
+          bool tap = false;
+          bool flat = true;
+          bool lifted;
+          bool pickup;
+          bool putdown;
+
+          accel_ctr = 0;
+
+          /* Mask DVP completion IRQ so it can't preempt the bit-bang I2C
+           * timing (same protection as LCD redraws).  ~2ms, every N frames.
+           */
+
+          up_disable_irq(BK7258_IRQ_YUV_BUF);
+          bk7258_accel_sample(&tap, &flat);
+          up_enable_irq(BK7258_IRQ_YUV_BUF);
+
+          /* Debounce pose: need 2 consecutive non-flat reads to count as
+           * "lifted" — rejects the odd corrupted sample.
+           */
+
+          if (!flat)
+            {
+              if (nonflat_run < 100) nonflat_run++;
+            }
+          else
+            {
+              nonflat_run = 0;
+            }
+
+          lifted  = (nonflat_run >= 2);
+          pickup  = (!accel_was_lifted && lifted);   /* flat -> lifted */
+          putdown = (accel_was_lifted && !lifted);   /* lifted -> flat */
+          accel_was_lifted = lifted;
+
+          /* Suppress the impact spike from setting the device down */
+
+          if (putdown)
+            {
+              tap_guard = VP_TAP_GUARD;
+              tap = false;
+            }
+          else if (tap_guard > 0)
+            {
+              tap_guard--;
+            }
+
+          if (tap && tap_guard == 0 && happy_cd == 0 && state != VP_HAPPY)
+            {
+              state = VP_HAPPY;
+              happy_ctr = 0;
+              VP_RENDER_EXPR(EYE_EXPR_HAPPY);
+              VP_LED_GREEN(true);
+              VP_LED_RED(true);
+              syslog(LOG_INFO, "[velapet] tap -> HAPPY\n");
+            }
+          else if (pickup && state == VP_SLEEP)
+            {
+              state = VP_WAKE;
+              wake_ctr = 0;
+              VP_RENDER_EXPR(EYE_EXPR_WAKE);
+              VP_LED_GREEN(true);
+              syslog(LOG_INFO, "[velapet] pickup -> WAKE\n");
+            }
+        }
 
       switch (state)
         {
