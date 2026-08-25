@@ -2233,3 +2233,53 @@ ISR 里收到 `YUV_ARV`(整帧写完)时,**仅当** `g_ready_buf < 0`
 - 🟢 <span style="color:#1a7f37">**M1 完成:`camera velapet` 跑通完整闭环——无人→困(半睑+慢眨)→见人→惊喜(瞳孔放大)→跟随(同向+周期眨眼)→离开→回困→回车退出。**</span>
 - **M2(下一步)**:LED/喇叭情绪外化 + `HAPPY` 态(脸居中且近时打招呼)。
 - **M3(等硬件)**:加速度计(拿起/轻拍)、电池低电"犯困"、语音命令词(等组委会确认 Wanson 授权)。
+
+## 28. M2 情绪外化：HAPPY 态 + LED 情绪灯 + 扬声器 DAC bring-up
+
+> 承接 §27。把"有情绪的眼睛"扩展到多模态外化：新增 `HAPPY` 态、双 LED 情绪灯、以及**扬声器发声**（M2c，本章最硬的一段）。
+> 相关代码：`src/bk7258_camera.c`（HAPPY 态 + LED）、`src/bk7258_gc9d01.c`（`lcdtest expr 3` / `lcdtest beep`）、`src/bk7258_audio.c`（DAC 播放）、`src/bk7258_audio.h`。
+
+### 28.1 M2a — HAPPY 态（脸近且居中→打招呼）
+- 在 `bk7258_camera_velapet` 状态机加第 4 态 `VP_HAPPY`：`TRACK` 中当 `blob_hits > VP_HAPPY_BLOB(800)`（脸够近）且 `|gaze| < VP_HAPPY_GAZE(6)`（居中）触发，眯眼笑 `EYE_EXPR_HAPPY` 保持 `VP_HAPPY_HOLD(15帧)≈1s`，然后回 `TRACK` 并进 `VP_HAPPY_COOLDOWN(150帧)` 冷却防抖刷。
+- 新渲染 `EYE_EXPR_HAPPY`：底部眼睑上抬（下弧）表达"眯眼笑"，仍走 §27.2 的 `eye_compose_full` 单窗口流式。
+
+### 28.2 M2b — LED 情绪灯（P40 红 / P41 绿）
+- 硬件：LED1=P40=红（1K），LED2=P41=绿（330R），**共阴到 GND → GPIO 拉高=亮**。
+- 状态映射（在状态机各转移点点灯）：
+
+| 状态 | 绿 P41 | 红 P40 |
+|---|---|---|
+| SLEEP | 灭 | 灭 |
+| WAKE / TRACK | 亮 | 灭 |
+| HAPPY | 亮 | 亮（开心时红灯叠加） |
+| 退出 | 灭 | 灭 |
+
+- 复用 camera.c 里已有的 `gpio_set_output_high()/gpio_drive_low()`，二值开关，无 PWM。
+
+### 28.3 M2c — 扬声器 DAC bring-up（本章重点）
+目标：先证明喇叭能出声（bring-up），播一个正弦"哔"声 `lcdtest beep [freq] [ms] [pa_gpio]`。
+
+**信号链**：BK7258 **内置模拟 DAC**（差分 AUDLP/AUDLN）→ **HT6873 D类功放（U8）** → 喇叭 CN8。板上无外部 codec，DAC 直驱功放。
+
+**复用 §采集（`audio_init`）已建好的基础设施**：音频电源域（`pwd_audp`）、APLL 时钟（cal `0x8973CA6F` / cfg `0xC2A0AE86` / spi_trigger）、`aud_cken`、AUD 数字块软复位，以及**关键的 `ana_write()/ana_setbit()` analog-SPI 写+完成轮询**机制（模拟寄存器不是普通 MMIO，写完要轮询 `ANA_SPI_STATE_REG` 对应位）。
+
+**DAC 相比 ADC 要补的位**（`audio_dac_init`，移植自 Armino `bk_aud_dac_init`）：
+- 模拟使能（`ana_setbit` on reg20/21）：`daclen`(reg20.21)、`dacdrven`(reg20.19)、`lendcoc/dcoc`(reg20.16)、`enidacl/idac`(reg21.18)；`enbs/dac_bias`(reg21.23) 与 `diffen`(reg20.13) 在 base 里已置位。
+- 数字：`dac_config0`(0x1c) 增益 `0x2d`(0dB) + HPF1/2 bypass；`AUD_CONFIG`(0xc0) `samp_rate_dac[7:6]`(16k=0x1) + `apll_sel`(bit8) + `dac_enable`(bit2)。
+- 数据泵（轮询）：轮询 `AUD_FIFO_STATUS` 的 `dacl_fifo_full`(bit9)，不满就写 16 位样本到 `AUD_DAC_FPORT`(0x48)。正弦按"单周期波表 + 取模循环"生成，避开热循环里调 `sinf`。
+- 回读确认 DAC 已就绪：`AUD_CONFIG=0x144`、`reg20=0xfbe92213`、`reg21=0x00840400`。
+
+**踩坑 1（决定性）：有信号但没声 = 外部功放没使能。**
+DAC 寄存器回读全对、日志正常，但喇叭不响。翻原理图发现喇叭前有颗 **HT6873** D类功放，其 **CTRL 脚**由 **P50（MCU 1 脚，网络名 `MUTE`）经 R70(1K) 驱动**（R71 10K 下拉），**高电平使能**。
+- 🟢 **修法**：播放前把 P50 拉高使能功放、播完拉低关断（`pa_gpio_set()`，走 `bk7258_gpio.h` 的 GPIO cfg + SYS func-select 置 GPIO）。ARMino `onboard_speaker_stream.c` 的 `_pa_gpio_ctrl` + voice 服务默认 `pa_on_level=1` 佐证了"拉高=开"。
+- 注意：网络名是 `MUTE`（在 P50 侧）经 R70 变成 `PA_SD`（在 HT6873 侧），**同一条线**；一开始误以为 PA_SD 没接 GPIO，其实就是 P50。
+
+**踩坑 2（供电依赖）：** HT6873 的 `PA_VDD` 经 R79(0R) 接 **VBAT**。若电池/VBAT 轨没供电，功放没电，CTRL 拉高也白搭 → 这把 M2c(喇叭) 和"电池充放电"绑到了同一条 VBAT 轨上。
+
+**踩坑 3（方法论，连栽两次）：** 改完代码"烧进去没反应"——两次都是**漏了重编/打包、烧了旧 bin**。判据：源文件 mtime 比 `nuttx.bin` 还新；运行日志里**看不到新加的关键日志行**（如 `[spk] PA enable: P50 = HIGH`）。
+- 🟢 **铁律**：改完必须 **build → repack → flash 三步全跑**，且用"新加的日志行"确认跑的是新固件，别只看功能没变就下结论。
+
+### 28.4 结果与下一步
+- 🟢 <span style="color:#1a7f37">**M2 完成：HAPPY 态 + 双色情绪灯 + 扬声器发声（`lcdtest beep 1000 800 50` → `[spk] PA enable: P50 = HIGH` + 喇叭响）全部跑通。**</span>
+- **待调驱动**：① 电池充放电（VBAT 轨，也是功放供电前提）→ ② SC7A20H 加速度计（拿起/轻拍）→ 语音命令词（等组委会确认 Wanson 授权/模型）。
+- **扬声器下一步**：目前是轮询喂 FIFO 的 bring-up 版；后续换 DMA（`DMA_DEV_AUDIO` + ring buffer，参考 Armino `command_ate_audio.c`）做连续播放（WAV/提示音）。
