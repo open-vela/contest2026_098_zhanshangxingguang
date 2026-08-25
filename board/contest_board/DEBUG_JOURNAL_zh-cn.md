@@ -2283,3 +2283,25 @@ DAC 寄存器回读全对、日志正常，但喇叭不响。翻原理图发现�
 - 🟢 <span style="color:#1a7f37">**M2 完成：HAPPY 态 + 双色情绪灯 + 扬声器发声（`lcdtest beep 1000 800 50` → `[spk] PA enable: P50 = HIGH` + 喇叭响）全部跑通。**</span>
 - **待调驱动**：① 电池充放电（VBAT 轨，也是功放供电前提）→ ② SC7A20H 加速度计（拿起/轻拍）→ 语音命令词（等组委会确认 Wanson 授权/模型）。
 - **扬声器下一步**：目前是轮询喂 FIFO 的 bring-up 版；后续换 DMA（`DMA_DEV_AUDIO` + ring buffer，参考 Armino `command_ate_audio.c`）做连续播放（WAV/提示音）。
+
+## 29. M3 加速度计 SC7A20H bring-up（拿起/敲击的前置）
+
+> SDK 里没有任何加速度计驱动，自己写。芯片 **SC7A20H**（芯朗，寄存器兼容 ST LIS2DH12），挂在 **IIC1**：**SCL=P20、SDA=P21**，INT1=P48；板上有 4.7k 上拉、CS 接高（I2C 模式）。
+> 相关代码：新建 `src/bk7258_accel.c` / `.h`，`src/CMakeLists.txt` 挂源文件，`src/bk7258_gc9d01.c` 加 `lcdtest accel` 分发。
+
+### 29.1 位操作 I2C（自带 GPIO 助手，不碰 camera.c）
+- 复用相机 SCCB 的开漏思路，但在 `bk7258_accel.c` 里自带 `pin_drive_low/high/release/read` + `accel_pin_gpio_mode`（走 `bk7258_gpio.h` 的寄存器宏），与 camera 解耦。
+- 命令 `lcdtest accel [n]`：扫 0x19→0x18 找地址 → 读 `WHO_AM_I(0x0f)` → 写 `CTRL_REG1=0x57`(100Hz+XYZ)、`CTRL_REG4=0x08`(±2g,12bit HR) → 连读 `0x28|0x80`(自增) 6 字节，`(int16)(hi<<8|lo)>>4` 得 mg。
+- ⚠️ **P20/P21 兼 SWD(SWCLK/SWDIO)**：配成 GPIO 跑 I2C 后 SWD 调试失效。当前走 UART bootloader 烧录，无影响，记一笔。
+
+### 29.2 踩坑（关键）：开漏 SCL → 通信发飘，改推挽即稳
+- **现象**：第一版 SCL 走开漏（释放靠上拉拉高），结果 `WHO_AM_I` 每次都不一样（0xb3/0x1c/0x18/0x10…）、地址在 0x18/0x19 之间乱跳、约一半事务 `read failed`——但**偶尔能读到 ±1g 的合理值**，说明芯片在、只是时序发飘。
+- **根因**：P20/P21 这条线（还兼 SWD、带额外电容）上拉太慢，释放 SCL 后只等 5µs 就采样，**SCL 还没真正拉高 → 位错位**。
+- 🟢 **修法**：**SCL 改推挽驱动**（SC7A20 不做时钟拉伸，主机独占时钟，推挽最干净），SDA 保持开漏；半周期 5µs→10µs（~50kHz）；读位改成"SCL 拉高后再采样"。
+- **结果**：`WHO_AM_I=0x11` 稳定、地址固定 0x18、零 read failed，静止数据抖动仅几 mg。
+- **教训**：位操作 I2C 若"半通半不通、数值偶尔对"，先怀疑**时钟沿/上拉上升时间**——SCL 推挽 + 放慢半周期是最省事的稳态解。
+
+### 29.3 结果与下一步
+- 🟢 <span style="color:#1a7f37">**M3a 完成：`lcdtest accel` 稳定读出三轴（WHO_AM_I=0x11，平放 Z≈−1g，翻转变号）。**</span>
+- 朝向：芯片 **+Z 朝下**装（平放 Z≈−1g），手势判断按此朝向。
+- 下一步：`CLICK_CFG(0x38)` 敲击检测 + 拿起/翻转姿态判断 → 接入情绪引擎（拿起→惊喜、轻拍→开心）。
