@@ -3,7 +3,7 @@
   "team_id": "contest2026_098_zhanshangxingguang",
   "github_login": "yz471686525-eng",
   "generator": "claude-code-collector@1.2.0",
-  "updated_at": "2026-08-25T04:53:21.544Z",
+  "updated_at": "2026-08-25T06:33:20.841Z",
   "sessions": [
     {
       "session_id": "8766fea6-c72a-45a5-9096-612a6386a36a",
@@ -178,9 +178,9 @@
       "session_id": "3ed0552d-0c22-41c2-8469-2bbd0ce7b8ca",
       "tool": "claude-code",
       "started_at": "2026-08-25T02:00:30.474Z",
-      "last_event_at": "2026-08-25T04:53:21.543Z",
-      "event_count": 117,
-      "raw_event_count": 181,
+      "last_event_at": "2026-08-25T06:33:20.840Z",
+      "event_count": 183,
+      "raw_event_count": 296,
       "file_path": "logs/yz471686525-eng/2026-08-25/claude-code__3ed0552d-0c22-41c2-8469-2bbd0ce7b8ca.jsonl",
       "collection_mode": "cli",
       "health": "ok",
