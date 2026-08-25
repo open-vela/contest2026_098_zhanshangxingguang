@@ -65,6 +65,7 @@
 
 #include "bk7258_gpio.h"
 #include "bk7258_audio.h"
+#include "bk7258_accel.h"
 #include "bk7258_psram.h"
 
 #ifdef CONFIG_EXAMPLES_GC2145_ID
@@ -5518,6 +5519,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
       int ms   = (argc > 3) ? atoi(argv[3]) : 500;
       int pa   = (argc > 4) ? atoi(argv[4]) : 50;   /* HT6873 PA_SD enable pin */
       return audio_beep(freq, ms, pa);
+    }
+
+  if (argc > 1 && strcmp(argv[1], "accel") == 0)
+    {
+      return bk7258_accel_main(argc - 1, &argv[1]);
     }
 
   if (argc > 1 && strcmp(argv[1], "one") == 0)

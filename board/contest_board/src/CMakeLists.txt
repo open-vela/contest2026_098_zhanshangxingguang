@@ -33,6 +33,7 @@ if(CONFIG_EXAMPLES_GC2145_ID)
 endif()
 
 list(APPEND SRCS bk7258_audio.c)
+list(APPEND SRCS bk7258_accel.c)
 
 target_sources(board PRIVATE ${SRCS})
 
