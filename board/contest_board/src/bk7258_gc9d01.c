@@ -5512,6 +5512,14 @@ int bk7258_lcdtest_main(int argc, char *argv[])
       return bk7258_mic_main(argc - 1, &argv[1]);
     }
 
+  if (argc > 1 && strcmp(argv[1], "beep") == 0)
+    {
+      int freq = (argc > 2) ? atoi(argv[2]) : 1000;
+      int ms   = (argc > 3) ? atoi(argv[3]) : 500;
+      int pa   = (argc > 4) ? atoi(argv[4]) : 50;   /* HT6873 PA_SD enable pin */
+      return audio_beep(freq, ms, pa);
+    }
+
   if (argc > 1 && strcmp(argv[1], "one") == 0)
     {
       return lcdtest_one(argc, argv);

@@ -44,6 +44,8 @@
 #include <debug.h>
 
 #include <nuttx/arch.h>
+
+#include "bk7258_gpio.h"   /* getreg32/putreg32 + GPIO cfg macros for PA control */
 #include <nuttx/nuttx.h>
 
 /****************************************************************************
@@ -142,6 +144,44 @@ static inline void aud_putreg(uint32_t val, uintptr_t addr)
 #define ANA_ENMICBIAS_BIT  5
 #define ANA_MICEN_BIT      28
 #define ANA_MIC_RST_BIT    29
+
+/****************************************************************************
+ * DAC playback additions (M2c speaker bring-up)
+ *   Digital regs share AUD_BASE; analog enables share ANA_REG20/21 and the
+ *   ana_write/ana_setbit SPI mechanism used by capture.
+ *   Port of Armino bk_aud_dac_init() (aud_dac_driver.c) + sys_hal.c mapping.
+ ****************************************************************************/
+
+#define AUD_DAC_CONFIG_0   (AUD_BASE + 0x1c)  /* REG_0x07 */
+#define AUD_DAC_FIFO_PORT  (AUD_BASE + 0x48)  /* REG_0x12, dacl_port[15:0] */
+
+/* AUD_DAC_CONFIG_0 bits */
+
+#define AUD_DAC_HPF2_BYP   (1u << 16)
+#define AUD_DAC_HPF1_BYP   (1u << 17)
+#define AUD_DAC_GAIN_MASK  (0x3fu << 18)
+#define AUD_DAC_GAIN_0DB   (0x2du << 18)   /* 0x2d = 0 dB */
+#define AUD_DAC_CLK_INVERT (1u << 24)
+
+/* AUD_CONFIG DAC bits (dac_enable=bit2, samp_rate_dac=[7:6]) */
+
+#define AUD_DAC_ENABLE     (1u << 2)
+#define AUD_RATE_DAC_MASK  (0x3u << 6)
+#define AUD_RATE_DAC_8K    (0x0u << 6)
+#define AUD_RATE_DAC_16K   (0x1u << 6)
+#define AUD_RATE_DAC_48K   (0x3u << 6)
+
+/* AUD_FIFO_STATUS: DAC-left FIFO full (bit9) */
+
+#define AUD_DACL_FIFO_FULL (1u << 9)
+
+/* Analog DAC enable bit positions (sys_hal.c → ana_reg20/21) */
+
+#define ANA_DAC_LENDCOC_BIT  16   /* reg20: dcoc_en      */
+#define ANA_DAC_DRVEN_BIT    19   /* reg20: dac_drv_en   */
+#define ANA_DAC_LEN_BIT      21   /* reg20: dacl_en      */
+#define ANA_DAC_ENIDACL_BIT  18   /* reg21: idac_en      */
+#define ANA_DAC_ENBS_BIT     23   /* reg21: dac_bias_en  */
 
 /****************************************************************************
  * Analog register base values.
@@ -454,6 +494,254 @@ void audio_deinit(void)
   val = aud_getreg(AUD_CLK_CONTROL);
   val |= AUD_ADC_CLK_GATE;
   aud_putreg(val, AUD_CLK_CONTROL);
+}
+
+/****************************************************************************
+ * Name: audio_dac_init
+ *
+ * Description:
+ *   Initialise BK7258 internal audio DAC (left channel, differential) for
+ *   speaker playback.  Reuses the same power/APLL clock and analog-SPI
+ *   sequence as audio_init(); does NOT enable the ADC/mic.
+ *   samp_rate: 8000 | 16000 | 48000.
+ *   Port of Armino bk_aud_dac_init() (aud_dac_driver.c).
+ ****************************************************************************/
+
+void audio_dac_init(int samp_rate)
+{
+  uint32_t val;
+  uint32_t rate_bits;
+
+  /* ---- Power domain on ---- */
+
+  val = aud_getreg(SYS_CPU_POWER_SLEEP_WAKEUP);
+  val &= ~SYS_PWD_AUDP;
+  aud_putreg(val, SYS_CPU_POWER_SLEEP_WAKEUP);
+  up_mdelay(2);
+
+  /* ---- SYS audio clock + APLL (identical to capture) ---- */
+
+  val = aud_getreg(SYS_CPU_CLK_DIV_MODE1);
+  val |= SYS_CKSEL_AUD;
+  aud_putreg(val, SYS_CPU_CLK_DIV_MODE1);
+
+  ana_setbit(ANA_REG5, 13, 0);          /* APLL power up */
+  ana_write(ANA_REG26, 0x8973CA6F);     /* cal */
+  ana_write(ANA_REG25, 0xC2A0AE86);     /* config */
+  ana_setbit(ANA_REG25, 18, 1);         /* spi_trigger pulse */
+  up_mdelay(1);
+  ana_setbit(ANA_REG25, 18, 0);
+  up_mdelay(2);
+
+  val = aud_getreg(SYS_CPU_DEVICE_CLK_ENABLE);
+  val |= SYS_AUD_CKEN;
+  aud_putreg(val, SYS_CPU_DEVICE_CLK_ENABLE);
+
+  /* ---- AUD digital block soft reset (global reset/gate, shared) ---- */
+
+  val = aud_getreg(AUD_CLK_CONTROL);
+  val &= ~AUD_ADC_CLK_GATE;
+  aud_putreg(val, AUD_CLK_CONTROL);
+
+  val = aud_getreg(AUD_CLK_CONTROL);
+  val |= AUD_ADC_SOFT_RESET;
+  aud_putreg(val, AUD_CLK_CONTROL);
+
+  /* ---- Analog base values (carry trim; diffen + dac bias preset) ---- */
+
+  ana_write(ANA_REG18, ANA_REG18_BASE);
+  ana_write(ANA_REG20, ANA_REG20_BASE);
+  ana_write(ANA_REG21, ANA_REG21_BASE);
+
+  /* ---- DAC analog enables (order per Armino bk_aud_dac_init) ---- */
+
+  ana_setbit(ANA_REG21, ANA_DAC_ENBS_BIT,    1);  /* dac bias   */
+  ana_setbit(ANA_REG20, ANA_DAC_DRVEN_BIT,   1);  /* driver     */
+  ana_setbit(ANA_REG20, ANA_DAC_LENDCOC_BIT, 1);  /* dcoc       */
+  ana_setbit(ANA_REG21, ANA_DAC_ENIDACL_BIT, 1);  /* idac       */
+  ana_setbit(ANA_REG20, ANA_DAC_LEN_BIT,     1);  /* dac left   */
+  /* diffen (reg20 bit13) already 1 in base → differential output */
+
+  /* ---- DAC digital: 0 dB gain, HPF bypass, normal clk edge ---- */
+
+  val = aud_getreg(AUD_DAC_CONFIG_0);
+  val &= ~(AUD_DAC_GAIN_MASK | AUD_DAC_CLK_INVERT);
+  val |= AUD_DAC_GAIN_0DB | AUD_DAC_HPF1_BYP | AUD_DAC_HPF2_BYP;
+  aud_putreg(val, AUD_DAC_CONFIG_0);
+
+  /* ---- Sample rate (APLL) ---- */
+
+  switch (samp_rate)
+    {
+      case 8000:  rate_bits = AUD_RATE_DAC_8K;  break;
+      case 48000: rate_bits = AUD_RATE_DAC_48K; break;
+      default:    rate_bits = AUD_RATE_DAC_16K; break;   /* 16k default */
+    }
+
+  val = aud_getreg(AUD_CONFIG);
+  val &= ~AUD_RATE_DAC_MASK;
+  val |= rate_bits | AUD_APLL_SEL;
+  aud_putreg(val, AUD_CONFIG);
+
+  /* ---- Enable DAC ---- */
+
+  val = aud_getreg(AUD_CONFIG);
+  val |= AUD_DAC_ENABLE;
+  aud_putreg(val, AUD_CONFIG);
+
+  up_mdelay(5);
+
+  syslog(LOG_INFO,
+         "[spk] dac init: rate=%d AUD_CONFIG=0x%08lx reg20=0x%08lx reg21=0x%08lx\n",
+         samp_rate,
+         (unsigned long)aud_getreg(AUD_CONFIG),
+         (unsigned long)aud_getreg(ANA_REG20),
+         (unsigned long)aud_getreg(ANA_REG21));
+}
+
+/****************************************************************************
+ * Name: audio_dac_deinit
+ ****************************************************************************/
+
+void audio_dac_deinit(void)
+{
+  uint32_t val;
+
+  syslog(LOG_INFO, "[spk] dac deinit\n");
+
+  val = aud_getreg(AUD_CONFIG);
+  val &= ~AUD_DAC_ENABLE;
+  aud_putreg(val, AUD_CONFIG);
+
+  ana_write(ANA_REG18, 0);
+  ana_write(ANA_REG20, 0);
+  ana_write(ANA_REG21, 0);
+
+  val = aud_getreg(AUD_CLK_CONTROL);
+  val |= AUD_ADC_CLK_GATE;
+  aud_putreg(val, AUD_CLK_CONTROL);
+}
+
+/****************************************************************************
+ * Name: pa_gpio_set
+ *   Drive an arbitrary pin as GPIO output at the given level.  Used to
+ *   enable/disable the external HT6873 Class-D speaker amp (PA_SD).
+ *   Selects GPIO (first) function + output-enable, robust for any pin.
+ ****************************************************************************/
+
+static void pa_gpio_set(int pin, int level)
+{
+  uintptr_t cfg_addr = BK7258_GPIO_CFG(pin);
+  uintptr_t fn_addr  = BK7258_SYS_GPIO_FUNC(pin);
+  uint32_t v;
+
+  /* SYS func-select nibble → 0 (GPIO / first function) */
+
+  v = getreg32(fn_addr);
+  v &= ~(BK7258_GPIO_FUNC_MASK << BK7258_GPIO_FUNC_SHIFT(pin));
+  putreg32(v, fn_addr);
+
+  /* AON cfg: GPIO mode, output enabled, drive level */
+
+  v = getreg32(cfg_addr);
+  v &= ~GPIO_CFG_SECOND_FUNC;   /* bit6=0: GPIO mode          */
+  v &= ~GPIO_CFG_OUTPUT_EN;     /* bit3=0: output enabled (active-low) */
+  if (level)
+    {
+      v |= GPIO_CFG_OUTPUT;     /* bit1=1: HIGH */
+    }
+  else
+    {
+      v &= ~GPIO_CFG_OUTPUT;    /* bit1=0: LOW  */
+    }
+  putreg32(v, cfg_addr);
+}
+
+/****************************************************************************
+ * Name: audio_dac_write
+ *   Poll DAC-left FIFO; write one 16-bit sample when not full.
+ ****************************************************************************/
+
+static void audio_dac_write(int16_t sample)
+{
+  uint32_t spin = 0;
+
+  while (aud_getreg(AUD_FIFO_STATUS) & AUD_DACL_FIFO_FULL)
+    {
+      if (++spin >= TOTAL_SPIN_CAP)
+        {
+          break;   /* safety: never hang the shell */
+        }
+    }
+
+  aud_putreg((uint32_t)(uint16_t)sample, AUD_DAC_FIFO_PORT);
+}
+
+/****************************************************************************
+ * Name: audio_beep
+ *   Play a sine tone through the speaker (polling data pump).
+ *   freq_hz: 50..4000, ms: 10..5000.  Bring-up test for M2c.
+ ****************************************************************************/
+
+int audio_beep(int freq_hz, int ms, int pa_gpio)
+{
+  const int fs = 16000;
+  const int16_t amp = 8000;          /* ~ -12 dBFS, safe level */
+  static int16_t period[320];        /* fs/50 = 320 max */
+  int plen;
+  long total;
+  long i;
+
+  if (freq_hz < 50)   freq_hz = 50;
+  if (freq_hz > 4000) freq_hz = 4000;
+  if (ms < 10)   ms = 10;
+  if (ms > 5000) ms = 5000;
+
+  plen = fs / freq_hz;
+  if (plen < 4)   plen = 4;
+  if (plen > 320) plen = 320;
+
+  for (i = 0; i < plen; i++)
+    {
+      float ph = 2.0f * 3.1415926f * (float)i / (float)plen;
+      period[i] = (int16_t)((float)amp * sinf(ph));
+    }
+
+  audio_dac_init(fs);
+
+  /* Enable external Class-D PA (HT6873) — active high.  pa_gpio < 0 skips. */
+
+  if (pa_gpio >= 0)
+    {
+      pa_gpio_set(pa_gpio, 1);
+      up_mdelay(10);   /* PA turn-on settling */
+      syslog(LOG_INFO, "[spk] PA enable: P%d = HIGH\n", pa_gpio);
+    }
+
+  total = (long)fs * ms / 1000;
+
+  syslog(LOG_INFO, "[spk] beep %d Hz, %d ms (%ld samples, period=%d)\n",
+         freq_hz, ms, total, plen);
+
+  for (i = 0; i < total; i++)
+    {
+      audio_dac_write(period[i % plen]);
+    }
+
+  for (i = 0; i < 256; i++)
+    {
+      audio_dac_write(0);
+    }
+
+  if (pa_gpio >= 0)
+    {
+      pa_gpio_set(pa_gpio, 0);   /* PA shutdown */
+    }
+
+  audio_dac_deinit();
+
+  syslog(LOG_INFO, "[spk] beep done\n");
+  return 0;
 }
 
 /****************************************************************************

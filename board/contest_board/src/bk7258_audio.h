@@ -44,4 +44,10 @@ void audio_deinit(void);
 int  mic_locate_process(int n, int *out_tau_q8);
 int  bk7258_mic_energy(int n);
 
+/* DAC playback (M2c speaker) */
+
+void audio_dac_init(int samp_rate);
+void audio_dac_deinit(void);
+int  audio_beep(int freq_hz, int ms, int pa_gpio);
+
 #endif /* __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_AUDIO_H */
