@@ -69,6 +69,7 @@
 #include "bk7258_psram.h"
 #include "bk7258_accel.h"
 #include "bk7258_audio.h"
+#include "bk7258_battery.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -5816,6 +5817,9 @@ enum
 #define VP_HAPPY_COOLDOWN     150  /* cooldown frames after happy, prevent spam */
 #define VP_ACCEL_EVERY        5    /* poll accelerometer every N frames */
 #define VP_SHAKE_GAP          6    /* 2nd pickup within N accel-polls = shake */
+#define VP_BAT_CHECK_EVERY  600   /* frames between battery reads (~低频) */
+#define VP_BAT_LOW_MV       3500  /* low-battery threshold (~15%) */
+#define VP_BAT_BLINK        25    /* red toggle period when low (frames) */
 
 /* LED emotion indicators (schematic): LED1=P40=RED(1K), LED2=P41=GREEN(330R).
  * Cathode-to-GND wiring → GPIO HIGH = LED ON, LOW = OFF.
@@ -5892,6 +5896,10 @@ int bk7258_camera_velapet(void)
   int  accel_tick = 0;
   int  last_pickup_tick = -1000;
   int  prev_state = -1;
+  int  bat_ctr = 0;
+  bool low_batt = false;
+  int  bat_blink_ctr = 0;
+  bool bat_led_on = false;
 
   /* Gaze state — identical to bk7258_camera_track */
 
@@ -6005,6 +6013,9 @@ int bk7258_camera_velapet(void)
   accel_ok = (bk7258_accel_probe() == 0);
   syslog(LOG_INFO, "[velapet] accel %s\n", accel_ok ? "ready" : "absent");
 
+  low_batt = (bk7258_battery_read_mv() < VP_BAT_LOW_MV);
+  syslog(LOG_INFO, "[velapet] battery %s at start\n", low_batt ? "LOW" : "ok");
+
   /* Main loop */
 
   while (true)
@@ -6106,6 +6117,17 @@ int bk7258_camera_velapet(void)
 
               last_pickup_tick = accel_tick;
             }
+        }
+
+      /* Periodic low-frequency battery check */
+      if (++bat_ctr >= VP_BAT_CHECK_EVERY)
+        {
+          int mv;
+          bat_ctr = 0;
+          mv = bk7258_battery_read_mv();
+          low_batt = (mv < VP_BAT_LOW_MV);
+          syslog(LOG_INFO, "[velapet] battery %d mV %s\n",
+                 mv, low_batt ? "(LOW)" : "");
         }
 
       switch (state)
@@ -6301,6 +6323,25 @@ int bk7258_camera_velapet(void)
             }
 
           prev_state = state;
+        }
+
+      /* Low-battery: slow-blink red (HAPPY owns red, so skip then) */
+      if (state != VP_HAPPY)
+        {
+          if (low_batt)
+            {
+              if (++bat_blink_ctr >= VP_BAT_BLINK)
+                {
+                  bat_blink_ctr = 0;
+                  bat_led_on = !bat_led_on;
+                  VP_LED_RED(bat_led_on);
+                }
+            }
+          else if (bat_led_on)   /* recovered → ensure red off */
+            {
+              bat_led_on = false;
+              VP_LED_RED(false);
+            }
         }
     }
 
