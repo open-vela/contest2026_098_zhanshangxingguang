@@ -180,6 +180,8 @@ void bk7258_lcd_eye_blink(int panel, int gaze_dx);
 
 int bk7258_camera_velapet(void);
 
+int bk7258_camera_hr(bool verbose);
+
 int bk7258_lcd_preview_init(void);
 void bk7258_lcd_preview_deinit(void);
 

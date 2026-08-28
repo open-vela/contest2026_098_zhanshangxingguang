@@ -6393,6 +6393,491 @@ cleanup_ctrl:
 }
 
 /****************************************************************************
+ * Name: bk7258_camera_hr
+ *   Fingertip rPPG heart-rate: cover the camera with a fingertip, sample
+ *   mean luma (Y) over a center ROI for ~N frames, measure real fps, then
+ *   detrend + autocorrelation to find the pulse period -> bpm.
+ *   Print-only (no LCD).  A first cut; auto-exposure may need locking later.
+ ****************************************************************************/
+
+#define HR_N_SAMPLES   450
+#define HR_SEG_LEN     300   /* window length for each autocorrelation pass */
+#define HR_WARMUP      40
+#define HR_MIN_BPM     45
+#define HR_MAX_BPM     200
+#define HR_N_WINDOWS     3   /* number of overlapping sub-windows */
+
+/* Quality thresholds (Improvement 2) and harmonic guard (Improvement 3).
+ * PI = perfusion index = pulsatile AC / DC, expressed x10 in percent
+ * (e.g. HR_PI_MIN_X10=5 means 0.5%).  These may need field tuning.
+ */
+
+#define HR_CORR_FAIR          35   /* min autocorr% to accept a reading */
+#define HR_CORR_GOOD          50   /* autocorr% for "good" quality */
+#define HR_PI_MIN_X10          5   /* min perfusion index (AC/DC), x10 % = 0.5% */
+#define HR_PI_GOOD_X10         8   /* PI for "good", x10 % = 0.8% */
+#define HR_SUBHARM_FRAC       80   /* fundamental peak must be >= this % of global max */
+#define HR_MIN_VALID_WINDOWS   2   /* need at least this many valid windows */
+#define HR_SPREAD_MAX_X10     40   /* max bpm_x10 range across windows; >4.0 -> force fair */
+
+/****************************************************************************
+ * Name: hr_estimate_window
+ *   Run the full DSP pipeline on one segment: detrend + bandpass + motion
+ *   clamp + autocorrelation + sub-harmonic-safe peak pick + parabolic
+ *   interpolation.  Returns true when the result is usable (corr and PI
+ *   above minimum thresholds).
+ *
+ *   Diagnostic prints ([hr] prefix) are emitted for this window.
+ ****************************************************************************/
+
+static bool hr_estimate_window(const int32_t *seg, int n, int fs_x100,
+                               int *bpm_x10_out, int *corr_out,
+                               int *pi_x10_out, bool verbose)
+{
+  static int32_t x[HR_SEG_LEN];
+  static int64_t ac[HR_SEG_LEN];
+  int i, tau, tau_min, tau_max, best_tau;
+  int64_t best, r0;
+  int W;
+
+  /* detrend: subtract ~1s moving average (high-pass) */
+
+  W = fs_x100 / 100;
+  if (W < 3) W = 3;
+
+  {
+    int32_t mean_all = 0;
+    for (i = 0; i < n; i++) mean_all += seg[i];
+    mean_all /= n;
+
+    for (i = 0; i < n; i++)
+      {
+        int a = i - W; if (a < 0) a = 0;
+        int b = i + W; if (b >= n) b = n - 1;
+        int64_t s = 0;
+        int k;
+        for (k = a; k <= b; k++) s += seg[k];
+        x[i] = seg[i] - (int32_t)(s / (b - a + 1));
+      }
+  }
+
+  /* band-pass: add [1 2 1]/4 low-pass + clamp motion spikes */
+
+  {
+    int64_t mad = 0;
+    int     clip;
+    int32_t prev, cur;
+
+    for (i = 0; i < n; i++)
+      mad += (x[i] < 0) ? -x[i] : x[i];
+    mad /= n;
+
+    clip = (int)(4 * mad);
+    if (clip < 1) clip = 1;
+    for (i = 0; i < n; i++)
+      {
+        if (x[i] >  clip) x[i] =  clip;
+        if (x[i] < -clip) x[i] = -clip;
+      }
+
+    prev = x[0];
+    for (i = 1; i < n - 1; i++)
+      {
+        cur  = x[i];
+        x[i] = (prev + 2 * cur + x[i + 1]) / 4;
+        prev = cur;
+      }
+  }
+
+  /* quality from the PULSATILE signal (PI = AC/DC) */
+
+  {
+    int32_t acmn = x[0], acmx = x[0];
+    int32_t mean_dc = 0;
+    int sig_range;
+
+    for (i = 0; i < n; i++) mean_dc += seg[i];
+    mean_dc /= n;
+
+    for (i = 1; i < n; i++)
+      {
+        if (x[i] < acmn) acmn = x[i];
+        if (x[i] > acmx) acmx = x[i];
+      }
+    sig_range = (int)(acmx - acmn);
+    *pi_x10_out = (mean_dc > 0)
+                ? (int)((int64_t)sig_range * 1000 / mean_dc)
+                : 0;
+
+    if (verbose)
+      syslog(LOG_INFO,
+             "[hr] AC p2p=%d  DC=%ld  PI=%d.%d%%\n",
+             sig_range, (long)mean_dc,
+             *pi_x10_out / 10, *pi_x10_out % 10);
+  }
+
+  /* autocorrelation over the HR lag range */
+
+  tau_min = (fs_x100 * 60) / (HR_MAX_BPM * 100);
+  tau_max = (fs_x100 * 60) / (HR_MIN_BPM * 100);
+  if (tau_min < 2) tau_min = 2;
+  if (tau_max >= n) tau_max = n - 1;
+
+  r0 = 0;
+  for (i = 0; i < n; i++) r0 += (int64_t)x[i] * x[i];
+
+  {
+    char line[256];
+    int t, nch = 0;
+
+    for (tau = tau_min; tau <= tau_max; tau++)
+      {
+        int64_t acc = 0;
+        for (i = 0; i + tau < n; i++) acc += (int64_t)x[i] * x[i + tau];
+        ac[tau] = acc;
+      }
+
+    for (t = tau_min; t <= tau_max && nch < (int)sizeof(line) - 8; t++)
+      {
+        int pct = r0 ? (int)(ac[t] * 100 / r0) : 0;
+        nch += snprintf(line + nch, sizeof(line) - nch, "%d ", pct);
+      }
+    if (verbose)
+      syslog(LOG_INFO, "[hr] corr%%[tau %d..%d]: %s\n", tau_min, tau_max, line);
+  }
+
+  /* peak pick: require anti-correlation dip before the peak (rejects
+   * monotonic decay from motion/drift); sub-harmonic guard picks the
+   * smallest-tau peak that is >= HR_SUBHARM_FRAC% of the global max
+   * to avoid locking onto the 2x-period harmonic (half-rate).
+   */
+
+  best = 0; best_tau = 0;
+  {
+    bool saw_dip = false;
+    int64_t gmax = 0;
+    int t, t2;
+
+    for (t = tau_min; t <= tau_max; t++)
+      {
+        if (ac[t] < 0) saw_dip = true;
+        if (t > tau_min && t < tau_max && saw_dip &&
+            ac[t] > ac[t - 1] && ac[t] >= ac[t + 1] && ac[t] > gmax)
+          {
+            gmax = ac[t];
+          }
+      }
+
+    saw_dip = false;
+    for (t2 = tau_min; t2 <= tau_max; t2++)
+      {
+        if (ac[t2] < 0) saw_dip = true;
+        if (t2 > tau_min && t2 < tau_max && saw_dip &&
+            ac[t2] > ac[t2 - 1] && ac[t2] >= ac[t2 + 1] &&
+            ac[t2] * 100 >= gmax * HR_SUBHARM_FRAC)
+          {
+            best = ac[t2];
+            best_tau = t2;
+            break;
+          }
+      }
+  }
+
+  /* gate: need peak + corr + PI */
+
+  {
+    int corr = (best_tau > 0 && r0 > 0) ? (int)(best * 100 / r0) : 0;
+    *corr_out = corr;
+
+    if (best_tau > 0 && corr >= HR_CORR_FAIR && *pi_x10_out >= HR_PI_MIN_X10)
+      {
+        int64_t ym1 = ac[best_tau - 1];
+        int64_t y0  = ac[best_tau];
+        int64_t yp1 = ac[best_tau + 1];
+        int64_t den = ym1 - 2 * y0 + yp1;
+        int frac_x1000 = 0;
+        int tau_x1000;
+
+        if (den != 0)
+          {
+            frac_x1000 = (int)(((ym1 - yp1) * 1000) / (2 * den));
+            if (frac_x1000 < -500) frac_x1000 = -500;
+            if (frac_x1000 >  500) frac_x1000 =  500;
+          }
+        tau_x1000 = best_tau * 1000 + frac_x1000;
+
+        *bpm_x10_out = (int)(((int64_t)fs_x100 * 60 * 1000 * 10)
+                             / ((int64_t)tau_x1000 * 100));
+        return true;
+      }
+
+    return false;
+  }
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_hr
+ *   Fingertip rPPG heart-rate: cover the camera with a fingertip, sample
+ *   mean luma (Y) over a center ROI for ~N frames, measure real fps, then
+ *   run 3 overlapping windows through the DSP pipeline and report the
+ *   median heart rate.  Print-only (no LCD).
+ ****************************************************************************/
+
+int bk7258_camera_hr(bool verbose)
+{
+  static int32_t sig[HR_N_SAMPLES];
+  int ret = 0;
+  int timeout_ms;
+  int i;
+  int r, c;
+  int fs_x100;
+  uint32_t frame_addr = 0;
+  clock_t t0, t1;
+  uint32_t dt;
+
+  /* multi-window median state */
+
+  int wins_bpm10[HR_N_WINDOWS];
+  int wins_corr[HR_N_WINDOWS];
+  int wins_pi10[HR_N_WINDOWS];
+  int nvalid = 0;
+
+  if (!g_dvp_pins_configed)
+    {
+      syslog(LOG_ERR, "[hr] DVP pins not configured\n");
+      return -ENODEV;
+    }
+  if (!g_framebuf_allocated)
+    {
+      syslog(LOG_ERR, "[hr] frame buffers not allocated\n");
+      return -ENOMEM;
+    }
+
+  ret = dvp_ctrl_config((uint32_t)(uintptr_t)g_camera_buf[0]);
+  if (ret < 0) goto cleanup_ctrl;
+  ret = dvp_irq_attach();
+  if (ret < 0) goto cleanup_irq;
+
+  g_dvp_vsync_count = 0;
+  g_dvp_frame_count = 0;
+  g_pingpong_count  = 0;
+  g_drop_count      = 0;
+  g_cur_buf         = 0;
+  g_ready_buf       = -1;
+  g_busy_buf        = -1;
+  g_stream_active   = true;
+
+  syslog(LOG_INFO, "[hr] cover the camera fully with a fingertip, hold still; measuring ...\n");
+
+  /* warm-up: let AE/AWB settle */
+
+  for (i = 0; i < HR_WARMUP; i++)
+    {
+      timeout_ms = 1000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+      if (frame_addr) dvp_frame_put();
+    }
+
+  /* Freeze exposure: AEC settled during warm-up; now disable it (page1
+   * reg 0x4f) so the ~1% pulsatile signal isn't compensated away. */
+
+  sccb_write_reg(0xfe, 0x01);
+  sccb_write_reg(0x4f, 0x00);
+  sccb_write_reg(0xfe, 0x00);
+  for (i = 0; i < 15; i++)      /* let frozen exposure settle */
+    {
+      timeout_ms = 1000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+      if (frame_addr) dvp_frame_put();
+    }
+  syslog(LOG_INFO, "[hr] AEC locked; sampling %d frames ...\n", HR_N_SAMPLES);
+
+  /* collect mean-Y time series */
+
+  t0 = clock_systime_ticks();
+  for (i = 0; i < HR_N_SAMPLES; i++)
+    {
+      int32_t sum = 0;
+      const uint8_t *fb;
+
+      timeout_ms = 1000;
+      while (timeout_ms > 0)
+        {
+          frame_addr = dvp_frame_get();
+          if (frame_addr) break;
+          up_udelay(1000);
+          timeout_ms--;
+        }
+      if (frame_addr == 0)
+        {
+          syslog(LOG_ERR, "[hr] frame timeout at %d\n", i);
+          ret = -ETIMEDOUT;
+          goto stop_stream;
+        }
+
+      fb = (const uint8_t *)(uintptr_t)frame_addr;
+      /* center ROI, step 16px; Y is the odd byte of each 2-byte pixel */
+
+      for (r = 120; r < 360; r += 16)
+        {
+          const uint8_t *row = fb + (size_t)r * CAMERA_HRES * 2;
+          for (c = 160; c < 480; c += 16)
+            {
+              sum += row[c * 2 + 1];
+            }
+        }
+      sig[i] = sum;
+      dvp_frame_put();
+    }
+  t1 = clock_systime_ticks();
+
+  dt = (uint32_t)(t1 - t0);
+  if (dt == 0) dt = 1;
+  fs_x100 = (int)((int64_t)HR_N_SAMPLES * 100 * TICK_PER_SEC / dt);
+  syslog(LOG_INFO, "[hr] %d samples, fps=%d.%02d\n",
+         HR_N_SAMPLES, fs_x100 / 100, fs_x100 % 100);
+
+  /* multi-window: 3 overlapping windows of length HR_SEG_LEN,
+   * starting at offsets 0, 75, 150 -> [0,300) [75,375) [150,450).
+   * Each window independently runs the full DSP pipeline; the median
+   * of valid bpm_x10 readings is the final HR (rejects single-window
+   * jitter from motion or breathing transients).
+   */
+
+  {
+    static const int win_off[HR_N_WINDOWS] = { 0, 75, 150 };
+    int w;
+    for (w = 0; w < HR_N_WINDOWS; w++)
+      {
+        int bpm10 = 0, corr = 0, pi10 = 0;
+        bool ok;
+
+        if (verbose)
+          syslog(LOG_INFO, "[hr] --- window %d (offset %d) ---\n",
+                 w, win_off[w]);
+
+        ok = hr_estimate_window(sig + win_off[w], HR_SEG_LEN, fs_x100,
+                                &bpm10, &corr, &pi10, verbose);
+
+        if (ok)
+          {
+            syslog(LOG_INFO,
+                   "[hr]   win%d: %d.%d bpm  corr=%d%%  PI=%d.%d%%\n",
+                   w, bpm10 / 10, bpm10 % 10, corr,
+                   pi10 / 10, pi10 % 10);
+            wins_bpm10[nvalid] = bpm10;
+            wins_corr[nvalid]  = corr;
+            wins_pi10[nvalid]  = pi10;
+            nvalid++;
+          }
+        else
+          {
+            syslog(LOG_INFO,
+                   "[hr]   win%d: rejected (corr=%d%% PI=%d.%d%%)\n",
+                   w, corr, pi10 / 10, pi10 % 10);
+          }
+      }
+  }
+
+  /* final report: need enough valid windows */
+
+  if (nvalid < HR_MIN_VALID_WINDOWS)
+    {
+      syslog(LOG_INFO,
+             "[hr] unstable — only %d/%d valid window(s), "
+             "press fingertip gently, hold still, retry\n",
+             nvalid, HR_N_WINDOWS);
+    }
+  else
+    {
+      /* simple selection-sort to find median index */
+
+      int j, k, mid = nvalid / 2;
+      int span;
+      for (j = 0; j < nvalid - 1; j++)
+        {
+          int imin = j;
+          for (k = j + 1; k < nvalid; k++)
+            if (wins_bpm10[k] < wins_bpm10[imin])
+              imin = k;
+          if (imin != j)
+            {
+              int tmp;
+              tmp = wins_bpm10[j]; wins_bpm10[j] = wins_bpm10[imin];
+                                   wins_bpm10[imin] = tmp;
+              tmp = wins_corr[j];  wins_corr[j]  = wins_corr[imin];
+                                   wins_corr[imin]  = tmp;
+              tmp = wins_pi10[j];  wins_pi10[j]  = wins_pi10[imin];
+                                   wins_pi10[imin]  = tmp;
+            }
+        }
+
+      span = wins_bpm10[nvalid - 1] - wins_bpm10[0];
+
+      {
+        int bpm10 = wins_bpm10[mid];
+        int corr  = wins_corr[mid];
+        int pi10  = wins_pi10[mid];
+        const char *q;
+
+        /* force "fair" when windows disagree */
+
+        if (span > HR_SPREAD_MAX_X10)
+          q = "fair";
+        else
+          q = (corr >= HR_CORR_GOOD && pi10 >= HR_PI_GOOD_X10)
+              ? "good" : "fair";
+
+        if (span > HR_SPREAD_MAX_X10)
+          syslog(LOG_INFO,
+                 "[hr] HR = %d.%d bpm  (windows=%d/%d  corr=%d%%"
+                 "  PI=%d.%d%%  spread=%d.%d  %s)\n",
+                 bpm10 / 10, bpm10 % 10, nvalid, HR_N_WINDOWS,
+                 corr, pi10 / 10, pi10 % 10,
+                 span / 10, span % 10, q);
+        else
+          syslog(LOG_INFO,
+                 "[hr] HR = %d.%d bpm  (windows=%d/%d  corr=%d%%"
+                 "  PI=%d.%d%%  %s)\n",
+                 bpm10 / 10, bpm10 % 10, nvalid, HR_N_WINDOWS,
+                 corr, pi10 / 10, pi10 % 10, q);
+      }
+    }
+
+  ret = 0;
+
+stop_stream:
+  /* restore auto-exposure for other camera commands */
+
+  sccb_write_reg(0xfe, 0x01);
+  sccb_write_reg(0x4f, 0x01);
+  sccb_write_reg(0xfe, 0x00);
+
+  g_stream_active = false;
+  dvp_irq_detach();
+  dvp_ctrl_deconfig();
+  return ret;
+
+cleanup_irq:
+  dvp_irq_detach();
+cleanup_ctrl:
+  dvp_ctrl_deconfig();
+  return ret;
+}
+
+/****************************************************************************
  * DEBUG_JOURNAL - GC2145/DVP Hardware Notes
  ****************************************************************************
  *
