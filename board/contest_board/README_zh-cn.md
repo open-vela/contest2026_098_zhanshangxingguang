@@ -160,3 +160,49 @@ fifo_port@`0x1c`,int_enable@`0x20`,int_status@`0x24`。UART clk = 26MHz XTAL,`cl
 - 点屏:双 GC9D01 SPI LCD + framebuffer(openvela 自带 `nuttx/drivers/lcd/gc9a01.c` 可作基底)+ LVGL。
 - 消除首字符杂散:UART setup 使能前 flush 一次 RX FIFO。
 - `repack.py` 路径参数化(env / 自动推导)以提升可移植性。
+
+
+## 心率测量(camera hr)
+
+指尖 rPPG(远程光电容积脉搏波)：用摄像头拍指尖,测血流引起的亮度周期性起伏,算出心率。
+
+### 用法
+```
+camera init      # 初始化 GC2145
+camera buf       # 分配 PSRAM 帧缓冲
+camera hr        # 测心率(默认精简输出)
+camera hr v      # 测心率 + 完整调试打印(窗头/AC-DC-PI/corr%[tau])
+```
+测量时：**用指尖完整盖住摄像头、轻压、保持不动**,约 16 秒出结果。
+
+### 输出解读
+```
+[hr]   win0: 60.5 bpm  corr=62%  PI=4.2%     # 3 个重叠子窗各自的估计
+[hr]   win1: 60.7 bpm  corr=52%  PI=4.7%
+[hr]   win2: 62.0 bpm  corr=39%  PI=4.2%
+[hr] HR = 60.7 bpm  (windows=3/3  corr=52%  PI=4.7%  good)   # 最终=有效窗中位数
+```
+- `bpm`：心率(0.1 精度)。`corr`：自相关峰强度(信号周期性,越高越可信)。`PI`：灌注指数=脉动幅度/直流(脉搏强弱)。
+- `windows=N/3`：3 个子窗里有 N 个有效。
+- 质量：`good`(corr≥50 且 PI≥0.8%) / `fair`(达标但偏弱,或窗间发散) / `unstable`(不可信,需重测)。
+- 若窗间极差 >4.0 bpm,输出会带 `spread=X.X` 并强制标 `fair`(提示接触不稳)。
+
+### 算法与稳健性设计
+1. 采 450 帧,对中心 ROI 的 Y(亮度)求和 → 时间序列;先 warm-up 让 AE/AWB 收敛,再**冻结 AEC**(否则自动曝光会把约 1% 的脉动补偿掉)。
+2. 每段信号：**高通去趋势**(减~1s 滑动平均,去基线漂移)+ **[1 2 1] 带通低通**(去高频噪声)+ **运动尖峰钳位**(4×平均绝对偏差)。
+3. **自相关**求周期,只在 HR 45~200 bpm 对应的 lag 区间搜;要求先出现负相关"谷"(排除漂移/运动),并取**最小 tau 的显著峰=基频**(防锁到 2× 周期的半频);**抛物线插值**得亚样本精度。
+4. **多窗中位数**:一次采集在 450 帧内取 3 个重叠子窗(偏移 0/75/150),各算一次,取中位数,抗单窗抖动。
+
+### 关键阈值(在 `src/bk7258_camera.c` 顶部宏,可调)
+| 宏 | 值 | 含义 |
+| ---- | ---- | ---- |
+| `HR_N_SAMPLES` | 450 | 采样帧数(~16s) |
+| `HR_SEG_LEN` / `HR_N_WINDOWS` | 300 / 3 | 子窗长度 / 子窗数 |
+| `HR_MIN_BPM` / `HR_MAX_BPM` | 45 / 200 | 心率搜索范围 |
+| `HR_CORR_FAIR` / `HR_CORR_GOOD` | 35 / 50 | 单窗有效门限 / good 门限(corr%) |
+| `HR_PI_MIN_X10` / `HR_PI_GOOD_X10` | 5 / 8 | 最小/优质灌注指数(x10 %,即 0.5%/0.8%) |
+| `HR_MIN_VALID_WINDOWS` | 2 | 至少多少有效窗才出结果 |
+| `HR_SPREAD_MAX_X10` | 40 | 窗间极差 >4.0 bpm 强制 fair |
+| `HR_SUBHARM_FRAC` | 80 | 基频峰须 ≥ 全局最大峰的 80% |
+
+> 现场若正常测也常判 unstable,可适当放宽 `HR_CORR_FAIR`(如 32)或 `HR_SPREAD_MAX_X10`(如 50)。
