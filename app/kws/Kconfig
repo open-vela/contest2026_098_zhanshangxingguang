@@ -1,0 +1,31 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config EXAMPLES_KWS
+	tristate "BK7258 offline keyword spotting (MFCC + DTW)"
+	default n
+	---help---
+		Fully offline, self-authored keyword spotting: microphone
+		PCM -> MFCC -> DTW template matching.  No neural net, no
+		external library (Apache-2.0 clean).
+		Commands: kws enroll <name> / run / list / clear / thresh.
+
+if EXAMPLES_KWS
+
+config EXAMPLES_KWS_PROGNAME
+	string "Program name"
+	default "kws"
+	---help---
+		NSH command name.
+
+config EXAMPLES_KWS_PRIORITY
+	int "Task priority"
+	default 100
+
+config EXAMPLES_KWS_STACKSIZE
+	int "Stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+endif

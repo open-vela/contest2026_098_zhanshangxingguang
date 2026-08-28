@@ -3,7 +3,7 @@
   "team_id": "contest2026_098_zhanshangxingguang",
   "github_login": "yz471686525-eng",
   "generator": "claude-code-collector@1.2.0",
-  "updated_at": "2026-08-28T10:20:40.437566+00:00",
+  "updated_at": "2026-08-28T15:18:05.915058+00:00",
   "sessions": [
     {
       "session_id": "8766fea6-c72a-45a5-9096-612a6386a36a",
@@ -190,10 +190,10 @@
       "session_id": "6c460b4c-27ef-4961-9968-64b7843137a9",
       "tool": "claude-code",
       "started_at": "2026-08-26T08:03:22.397Z",
-      "last_event_at": "2026-08-27T12:10:55.142Z",
-      "event_count": 73,
-      "raw_event_count": 403,
-      "file_path": "logs/yz471686525-eng/2026-08-27/claude-code__6c460b4c-27ef-4961-9968-64b7843137a9.jsonl",
+      "last_event_at": "2026-08-28T11:00:49.654Z",
+      "event_count": 159,
+      "raw_event_count": 881,
+      "file_path": "logs/yz471686525-eng/2026-08-28/claude-code__6c460b4c-27ef-4961-9968-64b7843137a9.jsonl",
       "collection_mode": "cli",
       "health": "ok",
       "model": "mimo-v2.5-pro"

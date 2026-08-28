@@ -40,6 +40,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <debug.h>
 
@@ -208,6 +209,10 @@ static inline void aud_putreg(uint32_t val, uintptr_t addr)
 
 #define MIC_N_SAMPLES      4096
 
+#define MIC_TEST_RATE      16000
+#define MIC_TEST_MAX_SEC   1
+#define MIC_TEST_MAX_SAMPLES (MIC_TEST_RATE * MIC_TEST_MAX_SEC)
+
 #define FIFO_SPIN_LIMIT    1000
 #define TOTAL_SPIN_CAP     (4u * 1024u * 1024u)
 
@@ -227,6 +232,7 @@ static inline void aud_putreg(uint32_t val, uintptr_t addr)
 
 static int16_t g_mic_left[MIC_N_SAMPLES];
 static int16_t g_mic_right[MIC_N_SAMPLES];
+static int16_t g_mic_test_pcm[MIC_TEST_MAX_SAMPLES];
 
 /* When true, audio_capture suppresses per-capture syslog to avoid
  * flooding the console in tight loops (e.g. lcdtest hear).
@@ -1324,14 +1330,273 @@ int bk7258_mic_energy(int n)
 }
 
 /****************************************************************************
+ * Name: bk7258_mic_record_16k
+ *
+ * Description:
+ *   Canonical 16 kHz mono (left-channel) PCM recording primitive, shared
+ *   by the "mic test" self-test and the offline keyword-spotting (KWS)
+ *   frontend.  Fills the internal g_mic_test_pcm[] buffer with up to
+ *   MIC_TEST_MAX_SAMPLES samples; retrieve it with bk7258_mic_pcm().
+ *
+ *   Sequence: audio_init() (power/APLL/analogue) -> re-program ADC rate
+ *   48 kHz -> 16 kHz -> enable -> drain the analogue start-up transient
+ *   -> poll-capture -> audio_deinit().
+ *
+ *   discard_ms: milliseconds of audio to read and throw away right after
+ *   ADC enable, to skip the front-end power-on transient (a rail-level
+ *   spike on the first samples).  Pass 0 to keep everything.
+ *
+ *   Bounded spin: never hangs the shell if the FIFO stays empty (mic
+ *   fault); returns however many samples were captured.
+ *
+ ****************************************************************************/
+
+int bk7258_mic_record_16k(int discard_ms)
+{
+  /* Per-sample dead-FIFO detector.  At 16 kHz a fresh sample arrives every
+   * ~62 us; this bound is several ms of empty polls, so it only trips if
+   * the mic/FIFO is truly dead — never during a healthy 1 s capture.
+   * (The 48 kHz locate path keeps its own tighter FIFO_SPIN_LIMIT /
+   *  TOTAL_SPIN_CAP; a single cumulative cap wrongly aborts a full-second
+   *  16 kHz capture, so we use only a generous per-sample limit here.)
+   */
+
+  const uint32_t rec_spin_limit = 500000u;
+  uint32_t val;
+  int n = 0;
+  int discard;
+  bool timed_out = false;
+
+  if (discard_ms < 0)
+    {
+      discard_ms = 0;
+    }
+
+  discard = (MIC_TEST_RATE * discard_ms) / 1000;
+
+  /* 1. Full analogue + APLL init (sets 48 kHz by default) */
+
+  audio_init();
+
+  /* 2. Re-program ADC sample rate 48 kHz -> 16 kHz */
+
+  val = aud_getreg(AUD_CONFIG);
+  val &= ~AUD_RATE_ADC_MASK;
+  val |= AUD_RATE_ADC_16K | AUD_APLL_SEL;
+  aud_putreg(val, AUD_CONFIG);
+
+  /* ADC frac divider = manual 0 (APLL handles the ratio) */
+
+  val = aud_getreg(AUD_EXTEND_CFG);
+  val &= ~AUD_ADC_FRAC_MANUAL;
+  aud_putreg(val, AUD_EXTEND_CFG);
+
+  /* Re-enable ADC + line-in after the rate change */
+
+  val = aud_getreg(AUD_CONFIG);
+  val |= AUD_ADC_ENABLE | AUD_LINEIN_ENABLE;
+  aud_putreg(val, AUD_CONFIG);
+
+  up_mdelay(50);
+
+  /* 3. Drain the start-up transient (read and discard) */
+
+  while (discard > 0 && !timed_out)
+    {
+      uint32_t spin = 0;
+
+      while (aud_getreg(AUD_FIFO_STATUS) & AUD_ADC_FIFO_EMPTY)
+        {
+          if (++spin >= rec_spin_limit)
+            {
+              timed_out = true;
+              break;
+            }
+        }
+
+      if (timed_out)
+        {
+          break;
+        }
+
+      (void)aud_getreg(AUD_ADC_FIFO_PORT);
+      discard--;
+    }
+
+  /* 4. Poll-capture left channel (mono) into the shared buffer */
+
+  while (n < MIC_TEST_MAX_SAMPLES && !timed_out)
+    {
+      uint32_t spin = 0;
+
+      while (aud_getreg(AUD_FIFO_STATUS) & AUD_ADC_FIFO_EMPTY)
+        {
+          if (++spin >= rec_spin_limit)
+            {
+              timed_out = true;
+              break;
+            }
+        }
+
+      if (timed_out)
+        {
+          break;
+        }
+
+      g_mic_test_pcm[n++] = (int16_t)(aud_getreg(AUD_ADC_FIFO_PORT) & 0xffff);
+    }
+
+  if (timed_out)
+    {
+      syslog(LOG_WARNING,
+             "[mic] capture stopped early: %d/%d samples "
+             "(FIFO_STATUS=0x%08lx AUD_CONFIG=0x%08lx)\n",
+             n, MIC_TEST_MAX_SAMPLES,
+             (unsigned long)aud_getreg(AUD_FIFO_STATUS),
+             (unsigned long)aud_getreg(AUD_CONFIG));
+    }
+
+  audio_deinit();
+  return n;
+}
+
+/****************************************************************************
+ * Name: bk7258_mic_pcm
+ *
+ * Description:
+ *   Return a pointer to the shared 16 kHz mono PCM buffer filled by the
+ *   most recent bk7258_mic_record_16k() call.  Valid for the returned
+ *   sample count (up to MIC_TEST_MAX_SAMPLES entries).
+ *
+ ****************************************************************************/
+
+const int16_t *bk7258_mic_pcm(void)
+{
+  return g_mic_test_pcm;
+}
+
+/****************************************************************************
+ * Name: mic_test_pcm
+ *
+ * Description:
+ *   "mic test" self-test: record 1 s of 16 kHz mono PCM (start-up
+ *   transient discarded) and print sample rate, count, integer RMS,
+ *   peak, and the first 16 raw samples.
+ *
+ ****************************************************************************/
+
+static int mic_test_pcm(int seconds)
+{
+  const int16_t *pcm;
+  int n;
+  int i;
+  int64_t energy;
+  int32_t peak;
+  int32_t rms;
+  int bit;
+
+  (void)seconds;   /* capture length is fixed at MIC_TEST_MAX_SEC */
+
+  syslog(LOG_INFO,
+         "[mic] test: rate=%d Hz, capturing %d samples (%d s) ...\n",
+         MIC_TEST_RATE, MIC_TEST_MAX_SAMPLES, MIC_TEST_MAX_SEC);
+
+  /* Discard the first 100 ms to skip the front-end power-on transient */
+
+  n = bk7258_mic_record_16k(100);
+  pcm = bk7258_mic_pcm();
+
+  if (n == 0)
+    {
+      syslog(LOG_ERR, "[mic] no samples captured\n");
+      return 0;
+    }
+
+  /* Compute integer RMS and peak (left channel = mono) */
+
+  energy = 0;
+  peak = 0;
+
+  for (i = 0; i < n; i++)
+    {
+      int32_t s = pcm[i];
+
+      energy += (int64_t)s * s;
+
+      if (s < 0)
+        {
+          s = -s;
+        }
+
+      if (s > peak)
+        {
+          peak = s;
+        }
+    }
+
+  rms = 0;
+
+  {
+    int32_t mean = (int32_t)(energy / n);
+
+    for (bit = 15; bit >= 0; bit--)
+      {
+        int32_t t = rms + (1 << bit);
+
+        if (t * t <= mean)
+          {
+            rms = t;
+          }
+      }
+  }
+
+  syslog(LOG_INFO,
+         "[mic] test result:\n"
+         "  sample_rate = %d Hz\n"
+         "  samples     = %d\n"
+         "  duration    = %d ms\n"
+         "  RMS         = %ld\n"
+         "  peak        = %ld\n",
+         MIC_TEST_RATE, n, (n * 1000) / MIC_TEST_RATE,
+         (long)rms, (long)peak);
+
+  syslog(LOG_INFO, "[mic] first 16 samples:\n");
+
+  for (i = 0; i < 16 && i < n; i++)
+    {
+      syslog(LOG_INFO, "  [%2d] %6d\n", i, pcm[i]);
+    }
+
+  return n;
+}
+
+/****************************************************************************
  * Name: bk7258_mic_main
  *
  * Description:
- *   NSH command: lcdtest mic — ADC dual-channel capture + RMS dump.
+ *   NSH command: mic — audio ADC self-test.
+ *     mic              — legacy dual-channel RMS test
+ *     mic test [N]     — 16 kHz mono PCM capture, N seconds (default 1, max 1)
  *
  ****************************************************************************/
 
 int bk7258_mic_main(int argc, char *argv[])
 {
+  /* mic test [N] — 16 kHz mono PCM self-test */
+
+  if (argc >= 2 && strcmp(argv[1], "test") == 0)
+    {
+      int sec = 1;
+
+      if (argc >= 3)
+        {
+          sec = atoi(argv[2]);
+        }
+
+      return mic_test_pcm(sec);
+    }
+
+  /* default: legacy dual-channel RMS test */
+
   return mic_test();
 }

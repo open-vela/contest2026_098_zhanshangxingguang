@@ -1,5 +1,5 @@
 /****************************************************************************
- * vendor/beken/boards/bk7258/bk7258-devkit/src/bk7258_audio.h
+ * apps/examples/mic/mic_main.c
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -18,49 +18,26 @@
  *
  ****************************************************************************/
 
-#ifndef __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_AUDIO_H
-#define __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_AUDIO_H
-
 /****************************************************************************
  * Included Files
  ****************************************************************************/
 
 #include <nuttx/config.h>
-
-#include <stdbool.h>
-#include <stdint.h>
+#include <stdio.h>
 
 /****************************************************************************
- * Public Function Prototypes
+ * External Functions
  ****************************************************************************/
 
-int bk7258_mic_main(int argc, char *argv[]);
-int bk7258_mic_locate(int *out_tau_q8);
+/* Provided by board/contest_board/src/bk7258_audio.c */
 
-/* 16 kHz mono PCM recording primitive (shared by "mic test" + KWS).
- * bk7258_mic_record_16k() fills an internal buffer and returns the sample
- * count; bk7258_mic_pcm() returns a pointer to that buffer.
- */
+extern int bk7258_mic_main(int argc, char *argv[]);
 
-int bk7258_mic_record_16k(int discard_ms);
-const int16_t *bk7258_mic_pcm(void);
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
 
-/* Continuous-loop helpers — audio_init/capture/deinit managed by caller */
-
-void bk7258_mic_set_quiet(bool q);
-
-void audio_init(void);
-int  audio_capture(int n);
-void audio_deinit(void);
-int  mic_locate_process(int n, int *out_tau_q8);
-int  bk7258_mic_energy(int n);
-
-/* DAC playback (M2c speaker) */
-
-void audio_dac_init(int samp_rate);
-void audio_dac_deinit(void);
-int  audio_beep(int freq_hz, int ms, int pa_gpio);
-int  audio_play_melody(const uint16_t *freqs, const uint16_t *durs_ms,
-                       int n, int pa_gpio);
-
-#endif /* __VENDOR_BEKEN_BK7258_DEVKIT_BK7258_AUDIO_H */
+int main(int argc, FAR char *argv[])
+{
+  return bk7258_mic_main(argc, argv);
+}
