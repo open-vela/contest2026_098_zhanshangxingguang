@@ -96,6 +96,51 @@ nsh> camera velapet
 
 > 提示:摄像头测心率用**指尖**;命令词识别为**说话人相关**,请用本人登记后再识别;体感手势以**拿起 / 摇动**为准。
 
+### 实测输出示例(真实串口日志,非模拟数据)
+
+> 以下为开发板真实串口输出;为便于阅读,已把麦克风上电初始化的刷屏日志用 `…略…` 省略,数值未做任何改动。
+
+**摄像头指尖测心率 `camera hr`**(手指盖住摄像头、静止约 20 秒;三窗一致 → 判定 good):
+```text
+nsh> camera hr
+[camera] DVP module clock enabled ...
+[hr] cover the camera fully with a fingertip, hold still; measuring ...
+[hr] AEC locked; sampling 450 frames ...
+[hr] 450 samples, fps=27.69
+[hr]   win0: 62.0 bpm  corr=63%  PI=1.0%
+[hr]   win1: 60.0 bpm  corr=74%  PI=1.0%
+[hr]   win2: 60.1 bpm  corr=75%  PI=1.0%
+[hr] HR = 60.1 bpm  (windows=3/3  corr=75%  PI=1.0%  good)
+```
+
+**离线命令词 `kws run` —— 命中**(登记"查心率"/"开始运动"各 2 遍,`thresh=11`;说"开始运动"):
+```text
+nsh> kws run
+[kws] speak the command now ...
+ …略(麦克风 init 日志)…
+[kws] captured 16000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] qixinlv        12.52
+    [1] qixinlv        12.81
+    [2] yundong         3.84
+    [3] yundong         6.01
+[kws] MATCH: "yundong"  (dist=3.84, other=12.52, thresh=11.00)
+```
+
+**离线命令词 `kws run` —— 拒识**(说一句无关的话,best 未过阈值/异词裕度 → 安全拒识,不误报):
+```text
+nsh> kws run
+ …略…
+[kws] distances (lower = closer):
+    [0] qixinlv        13.77
+    [1] qixinlv        13.73
+    [2] yundong        11.78
+    [3] yundong        11.49
+[kws] REJECTED (best="yundong" dist=11.49, other=13.73, thresh=11.00)
+```
+
+> `dist` = 与最近模板的 DTW 距离(越小越像),`other` = 最近的**另一个**命令词距离;判定需 `dist ≤ thresh` 且明显小于 `other`,兼顾命中与拒识。
+
 ## 五、AI Coding 使用说明
 
 本作品全程借助 AI 辅助开发(Claude / MiMo 系模型 + openvela 官方 AI Skills),覆盖:
