@@ -14,5 +14,7 @@
     <linkfile src="board/contest_board" dest="vendor/openvela/boards/contest2026_098_board"/>
     <linkfile src="app/lcdtest" dest="apps/examples/lcdtest"/>
     <linkfile src="app/camera" dest="apps/examples/gc2145_id"/>
+    <linkfile src="app/mic" dest="apps/examples/mic"/>
+    <linkfile src="app/kws" dest="apps/examples/kws"/>
   </project>
 </manifest>
