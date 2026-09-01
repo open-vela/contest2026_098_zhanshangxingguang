@@ -10,3 +10,7 @@ bk_repack_work/
 
 # 注意：logs/ 是大赛提交物（AI Coding 会话日志，见 logs/README.md），
 # 必须随代码一并提交，不要加入忽略列表。
+
+# KWS scratch audio sources (converted into app/kws/*_pcm.c, not committed)
+*.m4a
+*.wav

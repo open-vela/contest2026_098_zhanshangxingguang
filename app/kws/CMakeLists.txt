@@ -28,6 +28,8 @@ if(CONFIG_EXAMPLES_KWS)
     kws_main.c
     kws_mfcc.c
     kws_dtw.c
+    greeting_pcm.c
+    retry_pcm.c
     STACKSIZE
     ${CONFIG_EXAMPLES_KWS_STACKSIZE}
     PRIORITY

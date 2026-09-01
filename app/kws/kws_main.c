@@ -76,6 +76,38 @@ static int                   g_ntpl;
 static struct kws_feat_s     g_query;
 static float                 g_thresh = KWS_DEFAULT_THRESH;
 
+/* Offline voice-reply greeting: 16 kHz mono int16 PCM embedded in flash
+ * (see app/kws/greeting_pcm.c).  If empty (len==0), "kws wake" falls back
+ * to a short answer chime so it still audibly responds.
+ */
+
+extern const int16_t g_greeting_pcm[];     /* wake reply: "你好，我在"      */
+extern const int     g_greeting_pcm_len;
+extern const int16_t g_retry_pcm[];        /* retry prompt: "没听清，请再说" */
+extern const int     g_retry_pcm_len;
+
+/* Fallback chimes (used when the matching PCM clip is empty). */
+
+static const unsigned short s_ans_freq[]   = {  784, 1047, 1319 };  /* up   */
+static const unsigned short s_ans_dur[]    = {  110,  110,  160 };
+static const unsigned short s_retry_freq[] = {  660,  440 };        /* down */
+static const unsigned short s_retry_dur[]  = {  140,  200 };
+
+/* Speak an offline reply: embedded PCM if present, else a short chime. */
+
+static void kws_say(const int16_t *pcm, int len,
+                    const unsigned short *cf, const unsigned short *cd, int cn)
+{
+  if (len > 0)
+    {
+      bk7258_play_pcm16k(pcm, len);
+    }
+  else
+    {
+      audio_play_melody(cf, cd, cn, 50);
+    }
+}
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -259,6 +291,85 @@ static int kws_run(void)
 }
 
 /****************************************************************************
+ * Name: kws_wake
+ *
+ * Description:
+ *   Wake-word mode: record, recognise; if a template matches (below the
+ *   rejection threshold and clear of other keywords), speak an offline
+ *   greeting reply — embedded PCM if present, else a short answer chime.
+ *
+ ****************************************************************************/
+
+static int kws_wake(void)
+{
+  float dist[KWS_MAX_TEMPLATES];
+  int nf;
+  int i;
+  int best = -1;
+  float best_d = 0.0f;
+  float other_d = -1.0f;
+
+  if (g_ntpl == 0)
+    {
+      printf("[kws] no templates — 'kws enroll <name>' first\n");
+      return -1;
+    }
+
+  nf = record_utterance();
+  if (nf == 0)
+    {
+      /* Nothing heard — speak the retry prompt instead of staying silent. */
+
+      printf("[kws] didn't catch that — asking to repeat\n");
+      kws_say(g_retry_pcm, g_retry_pcm_len, s_retry_freq, s_retry_dur, 2);
+      return 0;
+    }
+
+  for (i = 0; i < g_ntpl; i++)
+    {
+      dist[i] = kws_dtw(&g_query.mfcc[0][0], g_query.nframes,
+                        &g_db[i].mfcc[0][0], g_db[i].nframes,
+                        1.0f / KWS_MFCC_SCALE);
+      if (best < 0 || dist[i] < best_d)
+        {
+          best = i;
+          best_d = dist[i];
+        }
+    }
+
+  for (i = 0; i < g_ntpl; i++)
+    {
+      if (strcmp(g_db[i].name, g_db[best].name) == 0)
+        {
+          continue;
+        }
+
+      if (other_d < 0.0f || dist[i] < other_d)
+        {
+          other_d = dist[i];
+        }
+    }
+
+  if (best_d <= g_thresh &&
+      (other_d < 0.0f || best_d <= KWS_MARGIN_RATIO * other_d))
+    {
+      printf("[kws] WAKE: \"%s\" (dist=%.2f) — replying ...\n",
+             g_db[best].name, (double)best_d);
+      kws_say(g_greeting_pcm, g_greeting_pcm_len, s_ans_freq, s_ans_dur, 3);
+    }
+  else
+    {
+      /* Heard something but not confident — ask to repeat. */
+
+      printf("[kws] not recognised (best=\"%s\" dist=%.2f) — asking to repeat\n",
+             g_db[best].name, (double)best_d);
+      kws_say(g_retry_pcm, g_retry_pcm_len, s_retry_freq, s_retry_dur, 2);
+    }
+
+  return 0;
+}
+
+/****************************************************************************
  * Name: kws_list
  ****************************************************************************/
 
@@ -303,6 +414,7 @@ static int usage(void)
   printf("Usage: kws <command>\n");
   printf("  enroll <name>  record ~1s and store a template for <name>\n");
   printf("  run            record ~1s and match against templates\n");
+  printf("  wake           record ~1s; if wake word, speak a greeting reply\n");
   printf("  list           list enrolled templates\n");
   printf("  clear          erase all templates\n");
   printf("  thresh [v]     show or set the DTW rejection threshold\n");
@@ -333,6 +445,10 @@ int main(int argc, FAR char *argv[])
   else if (strcmp(argv[1], "run") == 0)
     {
       return kws_run();
+    }
+  else if (strcmp(argv[1], "wake") == 0)
+    {
+      return kws_wake();
     }
   else if (strcmp(argv[1], "list") == 0)
     {

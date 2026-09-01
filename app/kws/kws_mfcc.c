@@ -54,6 +54,10 @@
                                         * fixed floor gives SNR-robust,
                                         * consistent endpointing)          */
 #define KWS_VAD_MARGIN  3              /* frames padded around speech     */
+#define KWS_SILENCE_PEAK 300           /* abs sample peak below this = no
+                                        * speech (guards single-keyword
+                                        * wake against silence/quiet noise;
+                                        * silence peak ~20, speech ~600)   */
 
 /****************************************************************************
  * Private Data — precomputed tables (built once)
@@ -415,6 +419,32 @@ int kws_extract(const int16_t *pcm, int npcm, struct kws_feat_s *out)
     {
       return 0;
     }
+
+  /* Absolute silence gate: if no sample is loud enough, treat as no speech
+   * (pure silence / quiet room tone).  This is the primary guard for the
+   * single-keyword wake-word case, where the confusion margin is unavailable
+   * and the absolute DTW threshold alone can be fooled by ambient noise.
+   */
+
+  {
+    int32_t peak = 0;
+    int i;
+
+    for (i = 0; i < npcm; i++)
+      {
+        int32_t a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+
+        if (a > peak)
+          {
+            peak = a;
+          }
+      }
+
+    if (peak < KWS_SILENCE_PEAK)
+      {
+        return 0;
+      }
+  }
 
   kws_build_tables();
 
