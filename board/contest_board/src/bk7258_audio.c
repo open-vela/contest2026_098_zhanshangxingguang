@@ -817,6 +817,47 @@ int audio_play_melody(const uint16_t *freqs, const uint16_t *durs_ms,
 }
 
 /****************************************************************************
+ * Name: bk7258_play_pcm16k
+ *
+ * Description:
+ *   Play a 16 kHz mono signed-16-bit PCM buffer through the speaker
+ *   (internal DAC + HT6873 Class-D PA on P50).  Blocks until done.
+ *   Used for the offline voice reply (e.g. a canned "你好,我在" greeting
+ *   played when the wake word is recognised).
+ *
+ ****************************************************************************/
+
+int bk7258_play_pcm16k(const int16_t *pcm, int n)
+{
+  const int pa_gpio = 50;   /* HT6873 PA_SD enable */
+  int i;
+
+  if (pcm == NULL || n <= 0)
+    {
+      return -1;
+    }
+
+  audio_dac_init(16000);
+
+  pa_gpio_set(pa_gpio, 1);
+  up_mdelay(10);            /* PA turn-on settling */
+
+  for (i = 0; i < n; i++)
+    {
+      audio_dac_write(pcm[i]);
+    }
+
+  for (i = 0; i < 256; i++)
+    {
+      audio_dac_write(0);   /* flush tail */
+    }
+
+  pa_gpio_set(pa_gpio, 0);  /* PA shutdown */
+  audio_dac_deinit();
+  return 0;
+}
+
+/****************************************************************************
  * Name: audio_capture
  *
  * Description:

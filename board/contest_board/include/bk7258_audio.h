@@ -66,4 +66,29 @@ int bk7258_mic_record_16k(int discard_ms);
 
 const int16_t *bk7258_mic_pcm(void);
 
+/****************************************************************************
+ * Name: bk7258_play_pcm16k
+ *
+ * Description:
+ *   Play a 16 kHz mono int16 PCM buffer through the speaker (internal DAC
+ *   + HT6873 PA on P50).  Blocks until playback finishes.  For the offline
+ *   voice reply (canned greeting played on wake-word recognition).
+ *
+ ****************************************************************************/
+
+int bk7258_play_pcm16k(const int16_t *pcm, int n);
+
+/****************************************************************************
+ * Name: audio_play_melody
+ *
+ * Description:
+ *   Play a short note sequence (freqs[i] Hz / durs_ms[i] ms; freqs[i]=0 =
+ *   rest).  pa_gpio = HT6873 PA enable pin (50 here), <0 to skip.
+ *   Used as the fallback "answer chime" when no greeting PCM is embedded.
+ *
+ ****************************************************************************/
+
+int audio_play_melody(const unsigned short *freqs,
+                      const unsigned short *durs_ms, int n, int pa_gpio);
+
 #endif /* __BOARD_CONTEST_BOARD_INCLUDE_BK7258_AUDIO_H */
