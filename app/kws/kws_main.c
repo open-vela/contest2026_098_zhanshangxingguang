@@ -121,11 +121,22 @@ static void kws_say(const int16_t *pcm, int len,
  *
  ****************************************************************************/
 
+/* Level below which kws_extract treats the capture as pure silence
+ * (mirrors KWS_SILENCE_PEAK in kws_mfcc.c).  Used here only to tell the
+ * user *why* a capture was rejected: too quiet vs. captured-but-unclear.
+ */
+
+#define KWS_DIAG_SILENCE_PEAK 300
+
 static int record_utterance(void)
 {
   const int16_t *pcm;
   int npcm;
   int nf;
+  int32_t peak = 0;
+  int64_t sumsq = 0;
+  int32_t rms;
+  int i;
 
   printf("[kws] speak the command now ...\n");
   fflush(stdout);
@@ -139,11 +150,43 @@ static int record_utterance(void)
       return 0;
     }
 
+  /* Level diagnostics — always printed so failures are debuggable on-device
+   * without a reflash: peak = loudest |sample|, rms = overall loudness.
+   * Silence peak ~20, a clear command ~600+.
+   */
+
+  for (i = 0; i < npcm; i++)
+    {
+      int32_t a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+
+      if (a > peak)
+        {
+          peak = a;
+        }
+
+      sumsq += (int64_t)pcm[i] * pcm[i];
+    }
+
+  rms = (int32_t)sqrt((double)(sumsq / (npcm > 0 ? npcm : 1)));
+  printf("[kws] level: peak=%ld rms=%ld (samples=%d)\n",
+         (long)peak, (long)rms, npcm);
+
   nf = kws_extract(pcm, npcm, &g_query);
 
   if (nf == 0)
     {
-      printf("[kws] no speech detected — speak louder / closer, retry\n");
+      if (peak < KWS_DIAG_SILENCE_PEAK)
+        {
+          printf("[kws] too quiet (peak=%ld < %d) — speak louder / closer, "
+                 "or speak right after this prompt\n",
+                 (long)peak, KWS_DIAG_SILENCE_PEAK);
+        }
+      else
+        {
+          printf("[kws] heard sound but no clear word (peak=%ld) — say the "
+                 "whole command in one breath, a bit slower\n", (long)peak);
+        }
+
       return 0;
     }
 

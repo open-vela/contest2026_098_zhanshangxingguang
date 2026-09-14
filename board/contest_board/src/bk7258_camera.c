@@ -6403,6 +6403,11 @@ cleanup_ctrl:
 #define HR_N_SAMPLES   450
 #define HR_SEG_LEN     300   /* window length for each autocorrelation pass */
 #define HR_WARMUP      40
+#define HR_NOFRAME_ABORT 3   /* consecutive 1s frame timeouts during warm-up
+                              * that mean the sensor isn't streaming -> bail
+                              * fast with a message instead of silently
+                              * grinding through all HR_WARMUP iterations
+                              * (which looks like a ~60s freeze) */
 #define HR_MIN_BPM     45
 #define HR_MAX_BPM     200
 #define HR_N_WINDOWS     3   /* number of overlapping sub-windows */
@@ -6669,20 +6674,43 @@ int bk7258_camera_hr(bool verbose)
 
   syslog(LOG_INFO, "[hr] cover the camera fully with a fingertip, hold still; measuring ...\n");
 
-  /* warm-up: let AE/AWB settle */
+  /* warm-up: let AE/AWB settle.  If the sensor isn't actually streaming
+   * (e.g. 'camera init' wasn't run this session, or an LCD command
+   * disturbed it), bail fast with a clear message instead of grinding
+   * silently through every iteration's 1 s timeout — that silent stretch
+   * (up to HR_WARMUP + settle + first-sample ≈ 60 s) looks like a freeze.
+   */
 
-  for (i = 0; i < HR_WARMUP; i++)
-    {
-      timeout_ms = 1000;
-      while (timeout_ms > 0)
-        {
-          frame_addr = dvp_frame_get();
-          if (frame_addr) break;
-          up_udelay(1000);
-          timeout_ms--;
-        }
-      if (frame_addr) dvp_frame_put();
-    }
+  {
+    int miss = 0;
+
+    for (i = 0; i < HR_WARMUP; i++)
+      {
+        timeout_ms = 1000;
+        frame_addr = 0;
+        while (timeout_ms > 0)
+          {
+            frame_addr = dvp_frame_get();
+            if (frame_addr) break;
+            up_udelay(1000);
+            timeout_ms--;
+          }
+
+        if (frame_addr)
+          {
+            dvp_frame_put();
+            miss = 0;
+          }
+        else if (++miss >= HR_NOFRAME_ABORT)
+          {
+            syslog(LOG_ERR,
+                   "[hr] no camera frames for %d s — sensor not streaming; "
+                   "run 'camera init' first (or reset), then retry\n", miss);
+            ret = -ETIMEDOUT;
+            goto stop_stream;
+          }
+      }
+  }
 
   /* Freeze exposure: AEC settled during warm-up; now disable it (page1
    * reg 0x4f) so the ~1% pulsatile signal isn't compensated away. */

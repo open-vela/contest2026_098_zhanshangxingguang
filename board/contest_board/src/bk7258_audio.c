@@ -210,8 +210,17 @@ static inline void aud_putreg(uint32_t val, uintptr_t addr)
 #define MIC_N_SAMPLES      4096
 
 #define MIC_TEST_RATE      16000
-#define MIC_TEST_MAX_SEC   1
-#define MIC_TEST_MAX_SAMPLES (MIC_TEST_RATE * MIC_TEST_MAX_SEC)
+
+/* Capture window.  Widened 1000 -> 1500 ms so the speaker has slack for
+ * reaction time after the "speak now" prompt: a 3-syllable command such as
+ * "cha-xin-lv" no longer gets clipped at the 1 s edge, which was the main
+ * cause of "no speech" / truncated-word rejects.  The VAD trims the extra
+ * silence back out before matching, so a longer window only costs buffer
+ * RAM (~16 KB) and never hurts recognition of short words.
+ */
+
+#define MIC_TEST_MAX_MS    1500
+#define MIC_TEST_MAX_SAMPLES ((MIC_TEST_RATE * MIC_TEST_MAX_MS) / 1000)
 
 #define FIFO_SPIN_LIMIT    1000
 #define TOTAL_SPIN_CAP     (4u * 1024u * 1024u)
@@ -1536,11 +1545,11 @@ static int mic_test_pcm(int seconds)
   int32_t rms;
   int bit;
 
-  (void)seconds;   /* capture length is fixed at MIC_TEST_MAX_SEC */
+  (void)seconds;   /* capture length is fixed at MIC_TEST_MAX_MS */
 
   syslog(LOG_INFO,
-         "[mic] test: rate=%d Hz, capturing %d samples (%d s) ...\n",
-         MIC_TEST_RATE, MIC_TEST_MAX_SAMPLES, MIC_TEST_MAX_SEC);
+         "[mic] test: rate=%d Hz, capturing %d samples (%d ms) ...\n",
+         MIC_TEST_RATE, MIC_TEST_MAX_SAMPLES, MIC_TEST_MAX_MS);
 
   /* Discard the first 100 ms to skip the front-end power-on transient */
 

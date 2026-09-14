@@ -64,12 +64,16 @@
 #define KWS_MEL_HIGH_HZ 8000.0f        /* filterbank high edge (Nyquist)  */
 #define KWS_PREEMPH     0.97f          /* pre-emphasis coefficient        */
 
-/* Raw analysis frame limit.  1 s @ 10 ms hop ~= 98 frames; 100 covers it.
- * This bounds only the per-frame energy pass (endpoint detection); the
- * stored feature sequence is time-normalised to KWS_FIXED_FRAMES below.
+/* Raw analysis frame limit.  Must cover the whole mic capture window so the
+ * endpoint detector can find the spoken word wherever it lands in time.
+ * The capture is 1.5 s (see MIC_TEST_MAX_MS) -> 1500/10 = 150 frames @ 10 ms
+ * hop; 160 leaves a little headroom.  This bounds only the per-frame energy
+ * pass (endpoint detection); the stored feature sequence is still
+ * time-normalised to KWS_FIXED_FRAMES below, so window length does not
+ * affect matching.
  */
 
-#define KWS_MAX_FRAMES  100
+#define KWS_MAX_FRAMES  160
 #define KWS_MIN_FRAMES  8              /* below this -> "no speech"       */
 
 /* Time normalisation: every utterance's trimmed MFCC sequence is linearly

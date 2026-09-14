@@ -1,0 +1,789 @@
+zhangyan68@zhangyan68-ThinkCentre-M760t:~/miwear-main/vendor/openvela/contest2026_098_zhanshangxingguang$ fuser -k /dev/ttyUSB0; picocom -b 115200 /dev/ttyUSB0
+picocom v3.1
+
+port is        : /dev/ttyUSB0
+flowcontrol    : none
+baudrate is    : 115200
+parity is      : none
+databits are   : 8
+stopbits are   : 1
+escape is      : C-a
+local echo is  : no
+noinit is      : no
+noreset is     : no
+hangup is      : no
+nolock is      : no
+send_cmd is    : sz -vv
+receive_cmd is : rz -vv -E
+imap is        : 
+omap is        : 
+emap is        : crcrlf,delbs,
+logfile is     : none
+initstring     : none
+exit_after is  : not set
+exit is        : no
+
+Type [C-a] [C-h] to see available commands
+Terminal ready
+
+nsh> kws enroll chaxinlv
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=381 rms=113 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] enrolled "chaxinlv" (slot 0, 48 frames). total templates: 1
+nsh> kws enroll chaxinlv
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=303 rms=87 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] enrolled "chaxinlv" (slot 1, 48 frames). total templates: 2
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=315 rms=101 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       9.35
+    [1] chaxinlv       12.63
+[kws] MATCH: "chaxinlv"  (dist=9.35, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=288 rms=101 (samples=24000)
+[kws] too quiet (peak=288 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=308 rms=104 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.53
+    [1] chaxinlv       11.98
+[kws] MATCH: "chaxinlv"  (dist=8.53, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=304 rms=104 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.36
+    [1] chaxinlv       11.66
+[kws] MATCH: "chaxinlv"  (dist=8.36, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=289 rms=94 (samples=24000)
+[kws] too quiet (peak=289 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=326 rms=111 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.75
+    [1] chaxinlv       12.30
+[kws] MATCH: "chaxinlv"  (dist=8.75, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=341 rms=108 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.85
+    [1] chaxinlv       11.15
+[kws] MATCH: "chaxinlv"  (dist=10.85, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=327 rms=115 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.50
+    [1] chaxinlv       11.82
+[kws] MATCH: "chaxinlv"  (dist=8.50, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=367 rms=113 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.24
+    [1] chaxinlv       12.54
+[kws] MATCH: "chaxinlv"  (dist=10.24, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=412 rms=124 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.45
+    [1] chaxinlv       12.00
+[kws] MATCH: "chaxinlv"  (dist=8.45, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=405 rms=132 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       11.82
+    [1] chaxinlv       11.75
+[kws] REJECTED (best="chaxinlv" dist=11.75, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=417 rms=121 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       7.20
+    [1] chaxinlv       10.61
+[kws] MATCH: "chaxinlv"  (dist=7.20, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=420 rms=133 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.09
+    [1] chaxinlv       12.83
+[kws] MATCH: "chaxinlv"  (dist=8.09, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=426 rms=135 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.41
+    [1] chaxinlv       11.11
+[kws] MATCH: "chaxinlv"  (dist=10.41, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=373 rms=137 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.23
+    [1] chaxinlv       11.65
+[kws] MATCH: "chaxinlv"  (dist=10.23, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=426 rms=126 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.06
+    [1] chaxinlv       11.77
+[kws] MATCH: "chaxinlv"  (dist=10.06, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=465 rms=123 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       7.83
+    [1] chaxinlv       9.35
+[kws] MATCH: "chaxinlv"  (dist=7.83, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=448 rms=125 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       9.05
+    [1] chaxinlv       10.30
+[kws] MATCH: "chaxinlv"  (dist=9.05, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=377 rms=103 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       6.61
+    [1] chaxinlv       11.45
+[kws] MATCH: "chaxinlv"  (dist=6.61, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=397 rms=117 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.17
+    [1] chaxinlv       11.73
+[kws] MATCH: "chaxinlv"  (dist=8.17, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=446 rms=138 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       7.65
+    [1] chaxinlv       11.05
+[kws] MATCH: "chaxinlv"  (dist=7.65, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=380 rms=120 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       9.92
+    [1] chaxinlv       10.00
+[kws] MATCH: "chaxinlv"  (dist=9.92, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=368 rms=133 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       9.00
+    [1] chaxinlv       12.74
+[kws] MATCH: "chaxinlv"  (dist=9.00, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=469 rms=139 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.74
+    [1] chaxinlv       12.71
+[kws] MATCH: "chaxinlv"  (dist=8.74, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=423 rms=113 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.11
+    [1] chaxinlv       10.97
+[kws] MATCH: "chaxinlv"  (dist=8.11, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=413 rms=114 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.39
+    [1] chaxinlv       11.78
+[kws] MATCH: "chaxinlv"  (dist=10.39, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=1085 rms=162 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       11.21
+    [1] chaxinlv       11.16
+[kws] REJECTED (best="chaxinlv" dist=11.16, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=392 rms=128 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       7.86
+    [1] chaxinlv       11.06
+[kws] MATCH: "chaxinlv"  (dist=7.86, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=334 rms=117 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       7.98
+    [1] chaxinlv       11.45
+[kws] MATCH: "chaxinlv"  (dist=7.98, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=299 rms=73 (samples=24000)
+[kws] too quiet (peak=299 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=350 rms=89 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       11.65
+    [1] chaxinlv       10.30
+[kws] MATCH: "chaxinlv"  (dist=10.30, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=397 rms=77 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       11.11
+    [1] chaxinlv       10.89
+[kws] MATCH: "chaxinlv"  (dist=10.89, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=433 rms=105 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       8.52
+    [1] chaxinlv       11.15
+[kws] MATCH: "chaxinlv"  (dist=8.52, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=475 rms=100 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       6.85
+    [1] chaxinlv       9.59
+[kws] MATCH: "chaxinlv"  (dist=6.85, other=0.00, thresh=11.00)
+nsh> kws run 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=431 rms=67 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] chaxinlv       11.37
+    [1] chaxinlv       10.64
+[kws] MATCH: "chaxinlv"  (dist=10.64, other=0.00, thresh=11.00)
+nsh> 
+
