@@ -1,0 +1,775 @@
+nsh> kws clear
+[kws] all templates cleared
+nsh> kws enroll yundong 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=546 rms=96 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] enrolled "yundong" (slot 0, 48 frames). total templates: 1
+nsh> kws enroll yundong 
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=385 rms=92 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] enrolled "yundong" (slot 1, 48 frames). total templates: 2
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=428 rms=62 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.89
+    [1] yundong        9.69
+[kws] MATCH: "yundong"  (dist=7.89, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=421 rms=94 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.90
+    [1] yundong        10.47
+[kws] MATCH: "yundong"  (dist=9.90, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=412 rms=87 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.23
+    [1] yundong        11.71
+[kws] MATCH: "yundong"  (dist=9.23, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=390 rms=87 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.61
+    [1] yundong        12.04
+[kws] MATCH: "yundong"  (dist=7.61, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=469 rms=90 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.25
+    [1] yundong        11.52
+[kws] MATCH: "yundong"  (dist=8.25, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=423 rms=99 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.95
+    [1] yundong        10.85
+[kws] MATCH: "yundong"  (dist=8.95, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=411 rms=92 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.73
+    [1] yundong        12.08
+[kws] MATCH: "yundong"  (dist=9.73, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=452 rms=92 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.33
+    [1] yundong        11.58
+[kws] MATCH: "yundong"  (dist=8.33, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=418 rms=83 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.64
+    [1] yundong        12.16
+[kws] MATCH: "yundong"  (dist=7.64, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=348 rms=81 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.44
+    [1] yundong        11.31
+[kws] MATCH: "yundong"  (dist=8.44, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=440 rms=90 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.32
+    [1] yundong        11.27
+[kws] MATCH: "yundong"  (dist=8.32, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=448 rms=65 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.80
+    [1] yundong        11.85
+[kws] MATCH: "yundong"  (dist=7.80, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=481 rms=104 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.19
+    [1] yundong        11.21
+[kws] MATCH: "yundong"  (dist=9.19, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=547 rms=98 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.63
+    [1] yundong        11.59
+[kws] MATCH: "yundong"  (dist=8.63, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=500 rms=102 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        10.59
+    [1] yundong        11.26
+[kws] MATCH: "yundong"  (dist=10.59, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=465 rms=102 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.54
+    [1] yundong        11.21
+[kws] MATCH: "yundong"  (dist=8.54, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=447 rms=89 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.64
+    [1] yundong        11.72
+[kws] MATCH: "yundong"  (dist=8.64, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=9226 rms=121 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.15
+    [1] yundong        11.73
+[kws] REJECTED (best="yundong" dist=11.73, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=372 rms=91 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.13
+    [1] yundong        11.41
+[kws] MATCH: "yundong"  (dist=9.13, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=446 rms=99 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.93
+    [1] yundong        10.46
+[kws] MATCH: "yundong"  (dist=8.93, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=368 rms=81 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        10.89
+    [1] yundong        12.23
+[kws] MATCH: "yundong"  (dist=10.89, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=341 rms=88 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.89
+    [1] yundong        11.85
+[kws] MATCH: "yundong"  (dist=7.89, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=340 rms=78 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.59
+    [1] yundong        11.81
+[kws] MATCH: "yundong"  (dist=7.59, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=418 rms=99 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.41
+    [1] yundong        11.62
+[kws] MATCH: "yundong"  (dist=8.41, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=378 rms=84 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.03
+    [1] yundong        11.88
+[kws] MATCH: "yundong"  (dist=8.03, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=350 rms=83 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.97
+    [1] yundong        11.70
+[kws] MATCH: "yundong"  (dist=8.97, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=354 rms=88 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.55
+    [1] yundong        10.70
+[kws] MATCH: "yundong"  (dist=9.55, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=6781 rms=119 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.06
+    [1] yundong        12.56
+[kws] REJECTED (best="yundong" dist=11.06, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=329 rms=75 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.55
+    [1] yundong        11.47
+[kws] MATCH: "yundong"  (dist=7.55, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=395 rms=82 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        7.96
+    [1] yundong        11.72
+[kws] MATCH: "yundong"  (dist=7.96, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=346 rms=84 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        9.43
+    [1] yundong        11.37
+[kws] MATCH: "yundong"  (dist=9.43, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=416 rms=94 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.90
+    [1] yundong        11.48
+[kws] MATCH: "yundong"  (dist=8.90, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=309 rms=81 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        10.47
+    [1] yundong        12.01
+[kws] MATCH: "yundong"  (dist=10.47, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=421 rms=71 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.19
+    [1] yundong        11.46
+[kws] MATCH: "yundong"  (dist=8.19, other=0.00, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=339 rms=69 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        8.54
+    [1] yundong        11.54
+[kws] MATCH: "yundong"  (dist=8.54, other=0.00, thresh=11.00)
+nsh> 
+

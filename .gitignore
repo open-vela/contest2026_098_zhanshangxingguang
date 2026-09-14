@@ -14,3 +14,10 @@ bk_repack_work/
 # KWS scratch audio sources (converted into app/kws/*_pcm.c, not committed)
 *.m4a
 *.wav
+
+# AI 编码代理本地工作区(不入仓)
+.claude/
+# 图片原图备份(体积大;已提交压缩版 docs/img/*.jpg)
+docs/img/img_original/
+# Word 文档为提交物(随 zip 上传);仓库以 docs/技术报告.md 为源,不跟踪 docx 二进制
+docs/*.docx

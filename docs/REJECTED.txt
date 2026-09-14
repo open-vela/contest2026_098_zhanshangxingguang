@@ -1,0 +1,860 @@
+zhangyan68@zhangyan68-ThinkCentre-M760t:~/miwear-main/vendor/openvela/contest2026_098_zhanshangxingguang$ fuser -k /dev/ttyUSB0; picocom -b 115200 /dev/ttyUSB0
+picocom v3.1
+
+port is        : /dev/ttyUSB0
+flowcontrol    : none
+baudrate is    : 115200
+parity is      : none
+databits are   : 8
+stopbits are   : 1
+escape is      : C-a
+local echo is  : no
+noinit is      : no
+noreset is     : no
+hangup is      : no
+nolock is      : no
+send_cmd is    : sz -vv
+receive_cmd is : rz -vv -E
+imap is        : 
+omap is        : 
+emap is        : crcrlf,delbs,
+logfile is     : none
+initstring     : none
+exit_after is  : not set
+exit is        : no
+
+Type [C-a] [C-h] to see available commands
+Terminal ready
+kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=294 rms=66 (samples=24000)
+[kws] too quiet (peak=294 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=239 rms=40 (samples=24000)
+[kws] too quiet (peak=239 < 300) — speak louder / closer, or speak right after this prompt
+nsh> 
+nsh> 
+nsh> 
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=377 rms=71 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        10.24
+    [1] yundong        12.21
+    [2] yundong        11.50
+    [3] chaxinlv       11.91
+    [4] chaxinlv       11.64
+    [5] chaxinlv       10.77
+[kws] REJECTED (best="yundong" dist=10.24, other=10.77, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=426 rms=109 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.88
+    [1] yundong        11.48
+    [2] yundong        12.87
+    [3] chaxinlv       12.01
+    [4] chaxinlv       12.52
+    [5] chaxinlv       9.76
+[kws] MATCH: "chaxinlv"  (dist=9.76, other=11.48, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=547 rms=103 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.08
+    [1] yundong        12.08
+    [2] yundong        11.48
+    [3] chaxinlv       12.18
+    [4] chaxinlv       12.10
+    [5] chaxinlv       10.64
+[kws] REJECTED (best="chaxinlv" dist=10.64, other=11.48, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=593 rms=103 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.74
+    [1] yundong        11.99
+    [2] yundong        12.64
+    [3] chaxinlv       11.52
+    [4] chaxinlv       12.28
+    [5] chaxinlv       10.88
+[kws] REJECTED (best="chaxinlv" dist=10.88, other=11.74, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=723 rms=118 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.11
+    [1] yundong        11.75
+    [2] yundong        12.09
+    [3] chaxinlv       11.72
+    [4] chaxinlv       12.36
+    [5] chaxinlv       12.86
+[kws] REJECTED (best="chaxinlv" dist=11.72, other=11.75, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=6758 rms=115 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.17
+    [1] yundong        11.63
+    [2] yundong        11.78
+    [3] chaxinlv       12.42
+    [4] chaxinlv       12.39
+    [5] chaxinlv       10.36
+[kws] REJECTED (best="chaxinlv" dist=10.36, other=11.63, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=436 rms=93 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.76
+    [1] yundong        12.35
+    [2] yundong        11.74
+    [3] chaxinlv       12.20
+    [4] chaxinlv       12.33
+    [5] chaxinlv       12.62
+[kws] REJECTED (best="yundong" dist=11.74, other=12.20, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=302 rms=90 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.68
+    [1] yundong        11.66
+    [2] yundong        10.96
+    [3] chaxinlv       12.03
+    [4] chaxinlv       11.82
+    [5] chaxinlv       12.12
+[kws] REJECTED (best="yundong" dist=10.96, other=11.82, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=367 rms=79 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.29
+    [1] yundong        11.45
+    [2] yundong        11.53
+    [3] chaxinlv       11.48
+    [4] chaxinlv       12.14
+    [5] chaxinlv       13.72
+[kws] REJECTED (best="yundong" dist=11.45, other=11.48, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=313 rms=69 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        10.65
+    [1] yundong        10.84
+    [2] yundong        11.27
+    [3] chaxinlv       11.48
+    [4] chaxinlv       13.08
+    [5] chaxinlv       10.74
+[kws] REJECTED (best="yundong" dist=10.65, other=10.74, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=511 rms=82 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.93
+    [1] yundong        11.58
+    [2] yundong        12.67
+    [3] chaxinlv       11.66
+    [4] chaxinlv       12.71
+    [5] chaxinlv       9.92
+[kws] MATCH: "chaxinlv"  (dist=9.92, other=11.58, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=398 rms=79 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.64
+    [1] yundong        10.13
+    [2] yundong        12.59
+    [3] chaxinlv       11.15
+    [4] chaxinlv       12.40
+    [5] chaxinlv       9.44
+[kws] REJECTED (best="chaxinlv" dist=9.44, other=10.13, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=245 rms=62 (samples=24000)
+[kws] too quiet (peak=245 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=353 rms=78 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.76
+    [1] yundong        11.65
+    [2] yundong        11.84
+    [3] chaxinlv       11.66
+    [4] chaxinlv       11.44
+    [5] chaxinlv       10.90
+[kws] REJECTED (best="chaxinlv" dist=10.90, other=11.65, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=217 rms=66 (samples=24000)
+[kws] too quiet (peak=217 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=7236 rms=103 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.24
+    [1] yundong        10.65
+    [2] yundong        11.60
+    [3] chaxinlv       10.79
+    [4] chaxinlv       11.96
+    [5] chaxinlv       9.95
+[kws] REJECTED (best="chaxinlv" dist=9.95, other=10.65, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=381 rms=85 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.99
+    [1] yundong        13.19
+    [2] yundong        10.47
+    [3] chaxinlv       11.93
+    [4] chaxinlv       9.96
+    [5] chaxinlv       13.32
+[kws] REJECTED (best="chaxinlv" dist=9.96, other=10.47, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=421 rms=100 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.53
+    [1] yundong        12.17
+    [2] yundong        11.08
+    [3] chaxinlv       11.44
+    [4] chaxinlv       11.37
+    [5] chaxinlv       11.33
+[kws] REJECTED (best="yundong" dist=11.08, other=11.33, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=700 rms=104 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.61
+    [1] yundong        11.97
+    [2] yundong        11.31
+    [3] chaxinlv       11.33
+    [4] chaxinlv       11.03
+    [5] chaxinlv       11.28
+[kws] REJECTED (best="chaxinlv" dist=11.03, other=11.31, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=342 rms=71 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.60
+    [1] yundong        10.44
+    [2] yundong        12.06
+    [3] chaxinlv       13.13
+    [4] chaxinlv       11.22
+    [5] chaxinlv       10.67
+[kws] REJECTED (best="yundong" dist=10.44, other=10.67, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=228 rms=79 (samples=24000)
+[kws] too quiet (peak=228 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=371 rms=99 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.77
+    [1] yundong        11.45
+    [2] yundong        13.16
+    [3] chaxinlv       11.62
+    [4] chaxinlv       12.64
+    [5] chaxinlv       10.63
+[kws] REJECTED (best="chaxinlv" dist=10.63, other=11.45, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=411 rms=87 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.01
+    [1] yundong        11.08
+    [2] yundong        11.73
+    [3] chaxinlv       11.35
+    [4] chaxinlv       12.59
+    [5] chaxinlv       10.81
+[kws] REJECTED (best="chaxinlv" dist=10.81, other=11.08, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=1213 rms=145 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.27
+    [1] yundong        10.65
+    [2] yundong        11.30
+    [3] chaxinlv       11.77
+    [4] chaxinlv       12.36
+    [5] chaxinlv       11.49
+[kws] REJECTED (best="yundong" dist=10.65, other=11.49, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=233 rms=71 (samples=24000)
+[kws] too quiet (peak=233 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=7598 rms=120 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.54
+    [1] yundong        12.06
+    [2] yundong        10.52
+    [3] chaxinlv       12.05
+    [4] chaxinlv       11.54
+    [5] chaxinlv       11.66
+[kws] REJECTED (best="yundong" dist=10.52, other=11.54, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=611 rms=83 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.82
+    [1] yundong        12.13
+    [2] yundong        12.53
+    [3] chaxinlv       14.03
+    [4] chaxinlv       11.23
+    [5] chaxinlv       11.07
+[kws] REJECTED (best="chaxinlv" dist=11.07, other=11.82, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=303 rms=71 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.67
+    [1] yundong        10.72
+    [2] yundong        12.17
+    [3] chaxinlv       12.60
+    [4] chaxinlv       11.46
+    [5] chaxinlv       10.80
+[kws] REJECTED (best="yundong" dist=10.72, other=10.80, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=209 rms=53 (samples=24000)
+[kws] too quiet (peak=209 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=293 rms=54 (samples=24000)
+[kws] too quiet (peak=293 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=621 rms=143 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.14
+    [1] yundong        11.19
+    [2] yundong        11.56
+    [3] chaxinlv       11.60
+    [4] chaxinlv       11.20
+    [5] chaxinlv       12.08
+[kws] REJECTED (best="yundong" dist=11.19, other=11.20, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=416 rms=97 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        12.75
+    [1] yundong        11.73
+    [2] yundong        12.40
+    [3] chaxinlv       11.99
+    [4] chaxinlv       13.18
+    [5] chaxinlv       10.02
+[kws] MATCH: "chaxinlv"  (dist=10.02, other=11.73, thresh=11.00)
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=255 rms=67 (samples=24000)
+[kws] too quiet (peak=255 < 300) — speak louder / closer, or speak right after this prompt
+nsh> kws run
+[kws] speak the command now ...
+[mic] PWR: POWER_SLEEP_WAKEUP=0x00000000
+[mic] SYS aud clock: DIV=0x02000033 CLK=0x40008084
+[mic] ana: writing base values
+[mic] ana: enable bias + mic1 + mic2
+[mic] ana: mic reset
+[mic] digital: ADC config
+[mic] digital: ADC enable
+[mic] init done. ana_reg readback:
+  reg5=0x8407836c reg25=0xc2a0ae86 reg26=0x8973ca6f
+  reg18=0x0bec00bd reg19=0x91800006
+  reg20=0xfbc02213 reg27=0x91800006
+  AUD_CONFIG=0x0000012b
+[mic] deinit
+[kws] level: peak=583 rms=118 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] distances (lower = closer):
+    [0] yundong        11.93
+    [1] yundong        11.33
+    [2] yundong        12.09
+    [3] chaxinlv       12.79
+    [4] chaxinlv       12.23
+    [5] chaxinlv       10.15
+[kws] REJECTED (best="chaxinlv" dist=10.15, other=11.33, thresh=11.00)
+nsh> 
+
