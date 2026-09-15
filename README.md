@@ -176,6 +176,15 @@ AI 对效率与质量的实际帮助:在无 openvela 适配先例的新芯片上
 
 > 说明:以上为如实边界。核心可演示能力(指尖测心率、离线命令词、双屏眼神、体感拿起/摇动、电量+低电红灯、LED)均已上板实测。
 
-## 七、许可证
+## 七、上游贡献(回馈 openvela 社区)
+
+本作品在 BK7258 适配过程中,向 openvela 上游提交了以下 PR(BK7258 新芯片支持,正在 review):
+
+- [open-vela/nuttx #332](https://github.com/open-vela/nuttx/pull/332) —— arch/arm/bk7258:BK7258 SoC 支持(CPU0/UART0 起 NSH)
+- [open-vela/nuttx #344](https://github.com/open-vela/nuttx/pull/344) —— arch/arm/bk7258:BK7258 支持 + PSRAM 驱动 + SysTick 修复
+- [open-vela/nuttx-apps #116](https://github.com/open-vela/nuttx-apps/pull/116) —— examples/psram:BK7258 PSRAM 测试 / heap / memalign 命令
+- [open-vela/vendor_beken #2](https://github.com/open-vela/vendor_beken/pull/2) —— boards/bk7258:bk7258-devkit 板级适配 + 移植手记
+
+## 八、许可证
 
 遵循 **Apache License 2.0**。板级适配与各 app 代码均为原创;离线命令词识别为纯自研实现,无第三方运行时依赖。
