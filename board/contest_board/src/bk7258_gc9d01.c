@@ -2650,6 +2650,31 @@ static void eye_blink(int gaze_dx)
 }
 
 /****************************************************************************
+ * Name: eye_blink_close / eye_blink_open
+ *
+ * Description:
+ *   Split blink primitives for non-blocking animation.
+ *   eye_blink_close() draws the closed-eye frame (IRQ-safe, no delay).
+ *   eye_blink_open()  draws the open-eye frame  (IRQ-safe, no delay).
+ *   Caller is responsible for the inter-frame delay and IRQ management.
+ *
+ ****************************************************************************/
+
+static void eye_blink_close(int gaze_dx)
+{
+  eye_compose_full(gaze_dx, EYE_PUPIL_R,
+                    EYE_CY + EYE_IRIS_R + 1,
+                    EYE_CY - EYE_IRIS_R - 1);
+}
+
+static void eye_blink_open(int gaze_dx)
+{
+  eye_compose_full(gaze_dx, EYE_PUPIL_R,
+                    EYE_CY - EYE_IRIS_R,
+                    EYE_CY + EYE_IRIS_R + 1);
+}
+
+/****************************************************************************
  * Name: bk7258_lcd_eye_expr
  *
  * Description:
@@ -2738,6 +2763,48 @@ void bk7258_lcd_eye_blink(int panel, int gaze_dx)
     }
 
   eye_blink(gaze_dx);
+}
+
+/****************************************************************************
+ * Name: bk7258_lcd_eye_blink_close / bk7258_lcd_eye_blink_open
+ *
+ * Description:
+ *   Split blink primitives for non-blocking velapet animation.
+ *   Close draws the closed-eye frame; Open draws the open-eye frame.
+ *   Caller handles panel switching, inter-frame delay, and IRQ gating.
+ *
+ ****************************************************************************/
+
+void bk7258_lcd_eye_blink_close(int panel, int gaze_dx)
+{
+  if (panel == 1 && g_active_pins != &g_lcd_right)
+    {
+      lcd_set_pins(&g_lcd_right);
+      lcd_setup_pins(&g_lcd_right);
+    }
+  else if (panel != 1 && g_active_pins != &g_lcd_left)
+    {
+      lcd_set_pins(&g_lcd_left);
+      lcd_setup_pins(&g_lcd_left);
+    }
+
+  eye_blink_close(gaze_dx);
+}
+
+void bk7258_lcd_eye_blink_open(int panel, int gaze_dx)
+{
+  if (panel == 1 && g_active_pins != &g_lcd_right)
+    {
+      lcd_set_pins(&g_lcd_right);
+      lcd_setup_pins(&g_lcd_right);
+    }
+  else if (panel != 1 && g_active_pins != &g_lcd_left)
+    {
+      lcd_set_pins(&g_lcd_left);
+      lcd_setup_pins(&g_lcd_left);
+    }
+
+  eye_blink_open(gaze_dx);
 }
 
 /****************************************************************************
