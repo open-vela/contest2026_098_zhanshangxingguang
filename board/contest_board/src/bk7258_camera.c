@@ -390,6 +390,8 @@ extern void bk7258_lcd_eye_gaze(int panel,
                                  int old_dx, int new_dx);
 extern void bk7258_lcd_eye_expr(int panel, int expr, int gaze_dx);
 extern void bk7258_lcd_eye_blink(int panel, int gaze_dx);
+extern void bk7258_lcd_eye_blink_close(int panel, int gaze_dx);
+extern void bk7258_lcd_eye_blink_open(int panel, int gaze_dx);
 
 /* DVP controller state - saved before dvp_ctrl_config(), restored by
  * dvp_ctrl_deconfig().  Only field-level RMW on shared registers.
@@ -6098,9 +6100,17 @@ int bk7258_camera_velapet(void)
   } while (0)
 
 #define VP_RENDER_BLINK() do { \
+    /* Phase 1: draw closed eyes — IRQ off only during LCD writes */ \
     up_disable_irq(BK7258_IRQ_YUV_BUF); \
-    bk7258_lcd_eye_blink(0, last_gaze); \
-    bk7258_lcd_eye_blink(1, last_gaze); \
+    bk7258_lcd_eye_blink_close(0, last_gaze); \
+    bk7258_lcd_eye_blink_close(1, last_gaze); \
+    up_enable_irq(BK7258_IRQ_YUV_BUF); \
+    /* Delay with IRQ ON — DVP continues capturing */ \
+    up_mdelay(120); \
+    /* Phase 2: draw open eyes — IRQ off only during LCD writes */ \
+    up_disable_irq(BK7258_IRQ_YUV_BUF); \
+    bk7258_lcd_eye_blink_open(0, last_gaze); \
+    bk7258_lcd_eye_blink_open(1, last_gaze); \
     up_enable_irq(BK7258_IRQ_YUV_BUF); \
   } while (0)
 
