@@ -61,6 +61,7 @@ int main(int argc, char *argv[])
       printf("  velapet — emotion engine"
              " (sleep/wake/track + blink), Enter to stop\n");
       printf("  hr [v] — fingertip heart rate (add v for verbose debug)\n");
+      printf("  pwrdump — dump power/clock registers (debug)\n");
       return 1;
     }
 
@@ -152,6 +153,10 @@ int main(int argc, char *argv[])
                       (strcmp(argv[2], "v") == 0 ||
                        strcmp(argv[2], "-v") == 0));
       return bk7258_camera_hr(verbose);
+    }
+  else if (strcmp(argv[1], "pwrdump") == 0)
+    {
+      return bk7258_camera_pwrdump();
     }
   else
     {

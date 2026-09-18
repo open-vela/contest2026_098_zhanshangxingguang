@@ -494,11 +494,13 @@ void audio_deinit(void)
 
   syslog(LOG_INFO, "[mic] deinit\n");
 
+  /* 1. Disable ADC + line-in */
+
   val = aud_getreg(AUD_CONFIG);
   val &= ~(AUD_ADC_ENABLE | AUD_LINEIN_ENABLE);
   aud_putreg(val, AUD_CONFIG);
 
-  /* Zero the analog registers via SPI */
+  /* 2. Zero the analog registers via SPI */
 
   ana_write(ANA_REG18, 0);
   ana_write(ANA_REG19, 0);
@@ -506,9 +508,41 @@ void audio_deinit(void)
   ana_write(ANA_REG21, 0);
   ana_write(ANA_REG27, 0);
 
+  /* 3. Gate ADC digital clock */
+
   val = aud_getreg(AUD_CLK_CONTROL);
   val |= AUD_ADC_CLK_GATE;
   aud_putreg(val, AUD_CLK_CONTROL);
+
+  /* 4. Restore audio clock source to XTAL (clear APLL select).
+   * audio_init() sets SYS_CKSEL_AUD (bit25 of DIV_MODE1) to use APLL;
+   * clear it so the APLL mux is disconnected before powering down APLL.
+   */
+
+  val = aud_getreg(SYS_CPU_CLK_DIV_MODE1);
+  val &= ~SYS_CKSEL_AUD;
+  aud_putreg(val, SYS_CPU_CLK_DIV_MODE1);
+
+  /* 5. Power down APLL (pwdaudpll=1 in ANA_REG5 bit13).
+   * Uses ana_setbit for SPI-polled analog write.
+   */
+
+  ana_setbit(ANA_REG5, 13, 1);
+
+  /* 6. Disable audio peripheral clock (bit30 of SYS_DEV_CLK_ENABLE) */
+
+  val = aud_getreg(SYS_CPU_DEVICE_CLK_ENABLE);
+  val &= ~SYS_AUD_CKEN;
+  aud_putreg(val, SYS_CPU_DEVICE_CLK_ENABLE);
+
+  /* 7. Power off audio domain (set pwd_audp bit6 of PWR_SLEEP_WAKEUP) */
+
+  val = aud_getreg(SYS_CPU_POWER_SLEEP_WAKEUP);
+  val |= SYS_PWD_AUDP;
+  aud_putreg(val, SYS_CPU_POWER_SLEEP_WAKEUP);
+
+  syslog(LOG_INFO, "[mic] deinit — ADC off, APLL off, AUD clock off, "
+         "audio domain off\n");
 }
 
 /****************************************************************************
@@ -616,6 +650,13 @@ void audio_dac_init(int samp_rate)
 
 /****************************************************************************
  * Name: audio_dac_deinit
+ *
+ * Description:
+ *   Disable DAC digital + analog, then fully shut down audio subsystem
+ *   (APLL off, AUD_CKEN off, audio domain off).  Mirrors audio_deinit()
+ *   so that every playback path leaves zero residual current.
+ *   audio_dac_init() re-enables everything on the next playback.
+ *
  ****************************************************************************/
 
 void audio_dac_deinit(void)
@@ -623,6 +664,8 @@ void audio_dac_deinit(void)
   uint32_t val;
 
   syslog(LOG_INFO, "[spk] dac deinit\n");
+
+  /* Disable DAC + zero DAC analog regs */
 
   val = aud_getreg(AUD_CONFIG);
   val &= ~AUD_DAC_ENABLE;
@@ -632,9 +675,36 @@ void audio_dac_deinit(void)
   ana_write(ANA_REG20, 0);
   ana_write(ANA_REG21, 0);
 
+  /* Gate audio digital clock */
+
   val = aud_getreg(AUD_CLK_CONTROL);
   val |= AUD_ADC_CLK_GATE;
   aud_putreg(val, AUD_CLK_CONTROL);
+
+  /* Switch audio clock source back to XTAL before powering down APLL */
+
+  val = aud_getreg(SYS_CPU_CLK_DIV_MODE1);
+  val &= ~SYS_CKSEL_AUD;
+  aud_putreg(val, SYS_CPU_CLK_DIV_MODE1);
+
+  /* Power down APLL (pwdaudpll=1 via SPI-polled ana write) */
+
+  ana_setbit(ANA_REG5, 13, 1);
+
+  /* Disable audio peripheral clock */
+
+  val = aud_getreg(SYS_CPU_DEVICE_CLK_ENABLE);
+  val &= ~SYS_AUD_CKEN;
+  aud_putreg(val, SYS_CPU_DEVICE_CLK_ENABLE);
+
+  /* Power off audio domain */
+
+  val = aud_getreg(SYS_CPU_POWER_SLEEP_WAKEUP);
+  val |= SYS_PWD_AUDP;
+  aud_putreg(val, SYS_CPU_POWER_SLEEP_WAKEUP);
+
+  syslog(LOG_INFO, "[spk] dac deinit — APLL off, AUD clock off, "
+         "audio domain off\n");
 }
 
 /****************************************************************************
