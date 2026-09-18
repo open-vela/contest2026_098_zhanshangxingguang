@@ -1569,6 +1569,188 @@ static void camera_power_on(gpio_state_t *pwr_saved, bool *pwr_ok,
 }
 
 /****************************************************************************
+ * Name: camera_power_off
+ *
+ * Description:
+ *   Power off the camera sensor: disable MCLK gate, drive PWR pin
+ *   inactive, put sensor into standby via PWDN pin.
+ *
+ *   Idempotent — safe to call multiple times.  Does NOT touch the
+ *   DVP controller or data pins (those are handled by dvp_ctrl_deconfig
+ *   and dvp_io_deconfig).
+ *
+ ****************************************************************************/
+
+static void camera_power_off(void)
+{
+  uint32_t val;
+
+  /* 1. Disable MCLK gate (CIS_AUXS_CKEN bit9) */
+
+  val = getreg32(CAMERA_CLK_EN_REG);
+  val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
+  putreg32(val, CAMERA_CLK_EN_REG);
+
+  /* 2. Drive camera PWR pin inactive (opposite of camera_power_on) */
+
+  if (g_cam_pwr_pin != CAMERA_GPIO_UNCONFIGURED)
+    {
+#ifdef CONFIG_CAMERA_PWR_ACTIVE_HIGH
+      gpio_drive_low(g_cam_pwr_pin);
+#else
+      gpio_set_output_high(g_cam_pwr_pin);
+#endif
+    }
+
+  /* 3. Put sensor into standby via PWDN pin */
+
+  if (g_cam_pwdn_pin != CAMERA_GPIO_UNCONFIGURED)
+    {
+#ifdef CONFIG_CAMERA_PWDNB_ACTIVE_HIGH
+      /* high=standby -> drive HIGH to enter standby */
+
+      gpio_set_output_high(g_cam_pwdn_pin);
+#else
+      /* low=standby -> drive LOW to enter standby */
+
+      gpio_drive_low(g_cam_pwdn_pin);
+#endif
+    }
+
+  syslog(LOG_INFO, "[camera] power off — MCLK gate off, PWR inactive\n");
+}
+
+/****************************************************************************
+ * Name: bk7258_camera_pwrdump
+ *
+ * Description:
+ *   Debug command: dump key power/clock registers to diagnose residual
+ *   current after command exit.  Compares PSRAM, camera, and LCD domains.
+ *
+ ****************************************************************************/
+
+int bk7258_camera_pwrdump(void)
+{
+  uint32_t dev_clk   = getreg32(0x44010030);  /* SYS_DEV_CLK_ENABLE */
+  uint32_t pwr_wake  = getreg32(0x44010040);  /* SYS_POWER_SLEEP_WAKEUP */
+  uint32_t cam_clk   = getreg32(0x44010034);  /* CAMERA_CLK_EN_REG */
+  uint32_t clk_div2  = getreg32(0x44010024);  /* SYS_CPU_CLK_DIV2 */
+  uint32_t ana13     = getreg32(0x44010134);  /* SYS_ANA_REG13 */
+  uint32_t yuv_glob  = getreg32(0x48020008);  /* YUV_BUF global ctrl */
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010030 DEV_CLK     = 0x%08lx  "
+         "PSRAM_CKEN(bit19)=%lu  SPI1_CKEN(bit9)=%lu\n",
+         (unsigned long)dev_clk,
+         (unsigned long)((dev_clk >> 19) & 1),
+         (unsigned long)((dev_clk >> 9) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010040 PWR_WAKEUP  = 0x%08lx  "
+         "PWD_AHBP(bit5)=%lu (0=on,1=off)\n",
+         (unsigned long)pwr_wake,
+         (unsigned long)((pwr_wake >> 5) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010034 CAM_CLK_EN  = 0x%08lx  "
+         "CIS_AUXS(bit9)=%lu  H264(bit0)=%lu  YUV_BUF(bit3)=%lu\n",
+         (unsigned long)cam_clk,
+         (unsigned long)((cam_clk >> 9) & 1),
+         (unsigned long)((cam_clk >> 0) & 1),
+         (unsigned long)((cam_clk >> 3) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010024 CLK_DIV2    = 0x%08lx  "
+         "PSRAM_CKSEL(bit5)=%lu  PSRAM_CKDIV(bit4)=%lu\n",
+         (unsigned long)clk_div2,
+         (unsigned long)((clk_div2 >> 5) & 1),
+         (unsigned long)((clk_div2 >> 4) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010134 ANA_REG13   = 0x%08lx  "
+         "enpsram(bit31)=%lu  psldo_swb(bit28)=%lu  vpsramsel=%lu\n",
+         (unsigned long)ana13,
+         (unsigned long)((ana13 >> 31) & 1),
+         (unsigned long)((ana13 >> 28) & 1),
+         (unsigned long)((ana13 >> 29) & 3));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x48020008 YUV_GLOBAL  = 0x%08lx\n",
+         (unsigned long)yuv_glob);
+
+  /* Audio domain: AUD_CKEN(bit30), PWD_AUDP(bit6), APLL pwdaudpll */
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010030 DEV_CLK     = 0x%08lx  "
+         "AUD_CKEN(bit30)=%lu\n",
+         (unsigned long)dev_clk,
+         (unsigned long)((dev_clk >> 30) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010040 PWR_WAKEUP  = 0x%08lx  "
+         "PWD_AUDP(bit6)=%lu (0=on,1=off)\n",
+         (unsigned long)pwr_wake,
+         (unsigned long)((pwr_wake >> 6) & 1));
+
+  syslog(LOG_INFO,
+         "[pwrdump] 0x44010114 ANA_REG5    = 0x%08lx  "
+         "pwdaudpll(bit13)=%lu (0=on,1=off)\n",
+         (unsigned long)getreg32(0x44010114),
+         (unsigned long)((getreg32(0x44010114) >> 13) & 1));
+
+  /* GPIO CFG dump for LCD / backlight / LDO pins.
+   * Each CFG register at 0x44000400 + pin*4:
+   *   bit6=second_func  bit5=pull_en  bit4=pull_mode(1=up)
+   *   bit3=output_en(active-low:0=enabled)  bit2=input_en
+   *   bit1=output_value  bit0=gpio_input(RO)
+   *
+   * "OE" column: output enabled (bit3==0).
+   */
+
+  {
+    static const int pins[] = {
+      25, 52,                          /* BL, LDO_3V3 */
+      2, 3, 4, 5, 45,                 /* left screen */
+      22, 23, 24, 7, 6                /* right screen */
+    };
+    static const char * const names[] = {
+      "BL_25", "LDO_52",
+      "L_SCLK2", "L_CS_3", "L_MOSI4", "L_DC__5", "L_RST45",
+      "R_SCK22", "R_CS23", "R_MOS24", "R_DC__7", "R_RST_6"
+    };
+    int i;
+
+    syslog(LOG_INFO,
+           "[pwrdump] GPIO CFG dump (AON_GPIO_BASE=0x44000400)\n");
+    syslog(LOG_INFO,
+           "  pin   name       CFG        OE  OUT  IN  2nd  pull\n");
+
+    for (i = 0; i < 12; i++)
+      {
+        int pin = pins[i];
+        uint32_t cfg = getreg32(0x44000400u + pin * 4);
+        int oe   = ((cfg >> 3) & 1) == 0;   /* active-low: 0=output enabled */
+        int out  = (cfg >> 1) & 1;
+        int in   = cfg & 1;
+        int func = (cfg >> 6) & 1;
+        int pull = (cfg >> 5) & 1;
+        int pmode = (cfg >> 4) & 1;
+
+        syslog(LOG_INFO,
+               "  P%-2d  %-9s  0x%08lx  %s  %d    %d   %s   %s\n",
+               pin, names[i], (unsigned long)cfg,
+               oe  ? "Y" : "N",
+               out,
+               in,
+               func ? "Y" : "N",
+               pull ? (pmode ? "UP" : "DN") : "--");
+      }
+  }
+
+  return 0;
+}
+
+/****************************************************************************
  * Reset
  ****************************************************************************/
 
@@ -2821,8 +3003,6 @@ cleanup:
 
 int bk7258_camera_stop(void)
 {
-  uint32_t val;
-
   /* Detach DVP IRQ first - stop interrupts before modifying registers */
 
   dvp_irq_detach();
@@ -2837,22 +3017,9 @@ int bk7258_camera_stop(void)
 
   dvp_module_clk_disable();
 
-  /* Turn off MCLK gate */
+  /* Turn off MCLK gate, PWR pin, PWDN standby */
 
-  val = getreg32(CAMERA_CLK_EN_REG);
-  val &= ~CAMERA_CIS_AUXS_CKEN_BIT;
-  putreg32(val, CAMERA_CLK_EN_REG);
-
-  /* Power off - drive PWR pin inactive */
-
-  if (g_cam_pwr_pin != CAMERA_GPIO_UNCONFIGURED)
-    {
-#ifdef CONFIG_CAMERA_PWR_ACTIVE_HIGH
-      gpio_drive_low(g_cam_pwr_pin);
-#else
-      gpio_set_output_high(g_cam_pwr_pin);
-#endif
-    }
+  camera_power_off();
 
   /* Deconfig DVP pins */
 
@@ -2861,6 +3028,7 @@ int bk7258_camera_stop(void)
   /* Free frame buffers */
 
   camera_framebuf_free();
+  bk7258_psram_deinit();
 
   syslog(LOG_INFO, "[camera] Stopped - MCLK off, power off, pins restored\n");
   return 0;
@@ -3983,6 +4151,9 @@ cleanup_irq:
   dvp_irq_detach();
 cleanup_ctrl:
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
   return ret;
 }
 
@@ -5774,6 +5945,9 @@ stop_stream:
   g_stream_active = false;
   dvp_irq_detach();
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
 
   syslog(LOG_INFO,
          "[track] done: captured=%d  "
@@ -5788,6 +5962,9 @@ cleanup_irq:
   dvp_irq_detach();
 cleanup_ctrl:
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
   return ret;
 }
 
@@ -5932,13 +6109,17 @@ int bk7258_camera_velapet(void)
 
   if (!g_dvp_pins_configed)
     {
-      syslog(LOG_ERR, "[velapet] DVP pins not configured\n");
+      syslog(LOG_ERR,
+             "[velapet] DVP pins not configured — "
+             "run 'camera init' first\n");
       return -ENODEV;
     }
 
   if (!g_framebuf_allocated)
     {
-      syslog(LOG_ERR, "[velapet] frame buffers not allocated\n");
+      syslog(LOG_ERR,
+             "[velapet] frame buffers not allocated — "
+             "run 'camera buf' first\n");
       return -ENOMEM;
     }
 
@@ -6372,6 +6553,9 @@ stop_stream:
   g_stream_active = false;
   dvp_irq_detach();
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
 
   syslog(LOG_INFO,
          "[velapet] done: pingpong=%lu  drop=%lu\n",
@@ -6389,6 +6573,11 @@ cleanup_irq:
   dvp_irq_detach();
 cleanup_ctrl:
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
+  gpio_drive_low(VP_LED_RED_PIN);
+  gpio_drive_low(VP_LED_GREEN_PIN);
   return ret;
 }
 
@@ -6649,12 +6838,17 @@ int bk7258_camera_hr(bool verbose)
 
   if (!g_dvp_pins_configed)
     {
-      syslog(LOG_ERR, "[hr] DVP pins not configured\n");
+      syslog(LOG_ERR,
+             "[hr] DVP pins not configured — "
+             "run 'camera init' first\n");
       return -ENODEV;
     }
+
   if (!g_framebuf_allocated)
     {
-      syslog(LOG_ERR, "[hr] frame buffers not allocated\n");
+      syslog(LOG_ERR,
+             "[hr] frame buffers not allocated — "
+             "run 'camera buf' first\n");
       return -ENOMEM;
     }
 
@@ -6819,6 +7013,38 @@ int bk7258_camera_hr(bool verbose)
       }
   }
 
+  /* --- perf: rPPG DSP estimation latency ---------------------------------
+   * Timing the full 3-window pipeline (detrend + band-pass + autocorrelation
+   * + peak-pick).  hr_estimate_window only reads 'sig' (writes to its own
+   * static scratch), so re-running it here does not disturb the results
+   * already stored above.  Repeat silently and divide for sub-tick accuracy.
+   */
+
+  {
+    static const int woff[HR_N_WINDOWS] = { 0, 75, 150 };
+    const int reps = 50;
+    int bpm10d = 0, corrd = 0, pi10d = 0;
+    int rr, w2;
+    clock_t  tk0 = clock_systime_ticks();
+    uint32_t us;
+
+    for (rr = 0; rr < reps; rr++)
+      {
+        for (w2 = 0; w2 < HR_N_WINDOWS; w2++)
+          {
+            (void)hr_estimate_window(sig + woff[w2], HR_SEG_LEN, fs_x100,
+                                     &bpm10d, &corrd, &pi10d, false);
+          }
+      }
+
+    us = (uint32_t)((uint64_t)(clock_systime_ticks() - tk0) * 1000000
+                    / TICK_PER_SEC / reps);
+    syslog(LOG_INFO,
+           "[hr] perf: rPPG estimate = %lu.%03lu ms (%d windows, avg x%d)\n",
+           (unsigned long)(us / 1000), (unsigned long)(us % 1000),
+           HR_N_WINDOWS, reps);
+  }
+
   /* final report: need enough valid windows */
 
   if (nvalid < HR_MIN_VALID_WINDOWS)
@@ -6896,12 +7122,18 @@ stop_stream:
   g_stream_active = false;
   dvp_irq_detach();
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
   return ret;
 
 cleanup_irq:
   dvp_irq_detach();
 cleanup_ctrl:
   dvp_ctrl_deconfig();
+  camera_power_off();
+  camera_framebuf_free();
+  bk7258_psram_deinit();
   return ret;
 }
 

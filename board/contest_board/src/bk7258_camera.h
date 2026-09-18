@@ -114,4 +114,14 @@ int bk7258_camera_buf(void);
 
 bool bk7258_camera_dvp_active(void);
 
+/****************************************************************************
+ * Name: bk7258_camera_pwrdump
+ *
+ * Description:
+ *   Debug: dump key power/clock registers (PSRAM, camera, LCD domains).
+ *
+ ****************************************************************************/
+
+int bk7258_camera_pwrdump(void);
+
 #endif /* __BOARD_CONTEST_BOARD_SRC_BK7258_CAMERA_H */

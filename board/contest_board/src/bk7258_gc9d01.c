@@ -495,6 +495,30 @@ static void gpio_set_output(int pin)
 }
 
 /****************************************************************************
+ * Name: gpio_drive_low
+ *
+ * Description:
+ *   Force a pin to GPIO output LOW with all enables explicitly set.
+ *   Unlike gpio_write() which only touches bit1, this writes the full
+ *   CFG word: func=GPIO, output_enable, output=0, input off, pull off.
+ *   Used for power-enable pins (BL, LDO) where a weak write may not
+ *   overcome external pull-ups or parasitic paths.
+ *
+ ****************************************************************************/
+
+static void gpio_drive_low(int pin)
+{
+  uint32_t cfg = getreg32(BK7258_GPIO_CFG(pin));
+
+  cfg &= ~GPIO_CFG_SECOND_FUNC;  /* bit6=0: GPIO function          */
+  cfg &= ~GPIO_CFG_OUTPUT_EN;    /* bit3=0: output enable (act. low)*/
+  cfg &= ~GPIO_CFG_OUTPUT;       /* bit1=0: output value LOW        */
+  cfg &= ~GPIO_CFG_INPUT_EN;     /* bit2=0: input buffer off        */
+  cfg &= ~GPIO_CFG_PULL_EN;      /* bit5=0: pull resistor off       */
+  putreg32(cfg, BK7258_GPIO_CFG(pin));
+}
+
+/****************************************************************************
  * Name: gpio_write
  ****************************************************************************/
 
@@ -857,17 +881,20 @@ static void lcd_spi_deinit(void)
       g_pins_in_spi_mode = false;
     }
 
-  /* Restore only the SPI1-related bits in shared clock registers.
-   * 0x44010030 bit9 = SPI1 module clock enable
-   * 0x44010028 bit5 = SPI1 clock source select (CLKSEL)
-   * DVP camera also uses 0x44010028 for its own clock fields.
-   * Full-word write with the init-time snapshot would clobber DVP bits.
+  /* Clear SPI1 module clock gate (bit9 of 0x44010030).
+   * Always unconditionally cleared — lcd_spi_init() re-enables it.
+   * Do NOT restore the saved bit; if SPI1 was on at boot, restoring
+   * would leave the clock running after LCD exit (~20 mA residual).
    */
 
   val = getreg32(BK7258_SYS_CLK_ENABLE_REG);
-  val &= ~SPI1_CLK_ENABLE_BIT;               /* clear SPI1 clock enable */
-  val |= (g_saved_sys_clk_en & SPI1_CLK_ENABLE_BIT);  /* restore original */
+  val &= ~SPI1_CLK_ENABLE_BIT;
   putreg32(val, BK7258_SYS_CLK_ENABLE_REG);
+
+  /* Restore SPI1 clock source select (0x44010028 bit5).
+   * DVP camera also uses this register for its own clock fields.
+   * Only touch the SPI1 CLKSEL bit, preserving DVP bits.
+   */
 
   val = getreg32(BK7258_SYS_CLK_DIV_REG);
   val &= ~SPI1_CLKSEL_BIT;                   /* clear SPI1 CLKSEL */
@@ -2092,18 +2119,51 @@ int bk7258_lcd_preview_init(void)
  *
  * Description:
  *   Release LCD resources after camera preview.
- *   Turns off backlight only.  P52 (LDO_3V3) stays on because
- *   other peripherals may depend on the 3.3V rail.
+ *   Turns off backlight, disables SPI1, and powers off LDO_3V3.
+ *
+ *   P52 (LDO_3V3 → U3 ME6211C33) supplies the LCD 3.3V rail only.
+ *   Camera sensor uses its own 2.8V/1.8V LDOs via PWR_CTL pin;
+ *   other peripherals (audio, accelerometer) are on the 1.8V domain.
+ *   Safe to disable after preview.
  *
  ****************************************************************************/
 
 void bk7258_lcd_preview_deinit(void)
 {
-  /* Backlight off — leave LDO_3V3 enabled */
+  /* SPI1 deinit — release SPI1 clock gate and restore GPIO mode.
+   * Guarded internally by g_hw_spi_capable — no-op if SPI was never
+   * initialized (e.g. right-panel-only path).
+   */
 
-  gpio_write(LCD_PIN_BL, 0);
+  lcd_spi_deinit();
 
-  syslog(LOG_INFO, "[lcd] preview deinit — backlight off\n");
+  /* Backlight off — force strong GPIO drive-low (not just output=0) */
+
+  gpio_drive_low(LCD_PIN_BL);
+
+  /* LDO_3V3 off — force strong GPIO drive-low */
+
+  gpio_drive_low(LCD_PIN_LDO33_EN);
+
+  /* Drive all LCD control pins low — prevent floating inputs from
+   * leaking through the panel's ESD diodes after LDO is off.
+   * Left:  SCLK=P2  CS=P3  MOSI=P4  DC=P5  RST=P45
+   * Right: SCLK=P22 CS=P23 MOSI=P24 DC=P7  RST=P6
+   */
+
+  gpio_write(g_lcd_left.sclk,  0);
+  gpio_write(g_lcd_left.cs,    0);
+  gpio_write(g_lcd_left.mosi,  0);
+  gpio_write(g_lcd_left.dc,    0);
+  gpio_write(g_lcd_left.rst,   0);
+
+  gpio_write(g_lcd_right.sclk, 0);
+  gpio_write(g_lcd_right.cs,   0);
+  gpio_write(g_lcd_right.mosi, 0);
+  gpio_write(g_lcd_right.dc,   0);
+  gpio_write(g_lcd_right.rst,  0);
+
+  syslog(LOG_INFO, "[lcd] preview deinit — BL off, LDO off, pins low\n");
 }
 
 /****************************************************************************
@@ -4220,6 +4280,39 @@ static int lcdtest_oeye(void)
 
   syslog(LOG_INFO, "[oeye] done\n");
 
+  /* Power off LCD — backlight + LDO_3V3 + SPI1 */
+
+  lcd_spi_deinit();
+  gpio_drive_low(LCD_PIN_BL);       /* P25: strong GPIO drive-low */
+  gpio_drive_low(LCD_PIN_LDO33_EN); /* P52: strong GPIO drive-low */
+
+  /* Drive all LCD control pins low (prevent floating leakage) */
+
+  gpio_write(g_lcd_left.sclk,  0);
+  gpio_write(g_lcd_left.cs,    0);
+  gpio_write(g_lcd_left.mosi,  0);
+  gpio_write(g_lcd_left.dc,    0);
+  gpio_write(g_lcd_left.rst,   0);
+  gpio_write(g_lcd_right.sclk, 0);
+  gpio_write(g_lcd_right.cs,   0);
+  gpio_write(g_lcd_right.mosi, 0);
+  gpio_write(g_lcd_right.dc,   0);
+  gpio_write(g_lcd_right.rst,  0);
+
+  /* Turn off LEDs (pins 40/41 were driven HIGH in the GPIO loop) */
+
+  gpio_write(40, 0);
+  gpio_write(41, 0);
+
+  /* Power off AHB/PSRAM domain (PWD_AHBP=1, bit5 of 0x44010040).
+   * velapet does this via bk7258_psram_deinit(); oeye doesn't init
+   * PSRAM so the guard in psram_deinit returns early — write directly.
+   */
+
+  putreg32(getreg32(0x44010040u) | (1u << 5), 0x44010040u);
+
+  syslog(LOG_INFO, "[oeye] LCD powered off — BL/LDO drive-low, AHB off\n");
+
   return OK;
 }
 
@@ -4337,6 +4430,37 @@ static int lcdtest_blink(int count)
   lcd_set_pins(&g_lcd_left);
 
   syslog(LOG_INFO, "[blink] done\n");
+
+  /* Power off LCD — backlight + LDO_3V3 + SPI1 */
+
+  lcd_spi_deinit();
+  gpio_drive_low(LCD_PIN_BL);       /* P25: strong GPIO drive-low */
+  gpio_drive_low(LCD_PIN_LDO33_EN); /* P52: strong GPIO drive-low */
+
+  /* Drive all LCD control pins low (prevent floating leakage) */
+
+  gpio_write(g_lcd_left.sclk,  0);
+  gpio_write(g_lcd_left.cs,    0);
+  gpio_write(g_lcd_left.mosi,  0);
+  gpio_write(g_lcd_left.dc,    0);
+  gpio_write(g_lcd_left.rst,   0);
+  gpio_write(g_lcd_right.sclk, 0);
+  gpio_write(g_lcd_right.cs,   0);
+  gpio_write(g_lcd_right.mosi, 0);
+  gpio_write(g_lcd_right.dc,   0);
+  gpio_write(g_lcd_right.rst,  0);
+
+  /* Turn off LEDs (pins 40/41 were driven HIGH in the GPIO loop) */
+
+  gpio_write(40, 0);
+  gpio_write(41, 0);
+
+  /* Power off AHB/PSRAM domain (same as oeye — see comment there) */
+
+  putreg32(getreg32(0x44010040u) | (1u << 5), 0x44010040u);
+
+  syslog(LOG_INFO, "[blink] LCD powered off — BL/LDO drive-low, AHB off\n");
+
   return OK;
 }
 
@@ -5193,6 +5317,14 @@ static int lcdtest_chunk(int argc, char *argv[])
          total,
          (unsigned long)elapsed_ms,
          (unsigned long)throughput_kbps);
+
+  /* Release PSRAM if we initialized it */
+
+  if (use_psram)
+    {
+      bk7258_psram_deinit();
+    }
+
   return 0;
 }
 
