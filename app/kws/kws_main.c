@@ -41,6 +41,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
+
+#include <nuttx/clock.h>
 
 #include <arch/board/bk7258_audio.h>
 
@@ -191,6 +194,32 @@ static int record_utterance(void)
     }
 
   printf("[kws] captured %d samples, %d MFCC frames\n", npcm, nf);
+
+  /* --- perf: average MFCC front-end latency ------------------------------
+   * The system tick is coarse (~10 ms), so a single extract is unmeasurable.
+   * Re-run the (deterministic) extraction on the same PCM buffer a few times
+   * and divide, giving sub-ms resolution.  Result is the per-utterance MFCC
+   * compute cost (FFT + Mel + DCT + CMVN), excluding the fixed capture window.
+   */
+
+  {
+    static struct kws_feat_s s_perf;      /* scratch, keep off the stack */
+    const int reps = 20;
+    clock_t   tk0  = clock_systime_ticks();
+    int       rr;
+    uint32_t  us;
+
+    for (rr = 0; rr < reps; rr++)
+      {
+        kws_extract(pcm, npcm, &s_perf);
+      }
+
+    us = (uint32_t)((uint64_t)(clock_systime_ticks() - tk0) * 1000000
+                    / TICK_PER_SEC / reps);
+    printf("[kws] perf: MFCC extract = %lu.%03lu ms/utt (avg x%d)\n",
+           (unsigned long)(us / 1000), (unsigned long)(us % 1000), reps);
+  }
+
   return nf;
 }
 
@@ -292,6 +321,37 @@ static int kws_run(void)
           best   = i;
           best_d = dist[i];
         }
+    }
+
+  /* --- perf: average DTW matching latency (query vs. all templates) ------- */
+
+  if (g_ntpl > 0)
+    {
+      const int reps = 200;
+      volatile float sink = 0.0f;
+      clock_t   tk0 = clock_systime_ticks();
+      int       rr, jj;
+      uint32_t  us, us_tpl;
+
+      for (rr = 0; rr < reps; rr++)
+        {
+          for (jj = 0; jj < g_ntpl; jj++)
+            {
+              sink += kws_dtw(&g_query.mfcc[0][0], g_query.nframes,
+                              &g_db[jj].mfcc[0][0], g_db[jj].nframes,
+                              1.0f / KWS_MFCC_SCALE);
+            }
+        }
+
+      us     = (uint32_t)((uint64_t)(clock_systime_ticks() - tk0) * 1000000
+                          / TICK_PER_SEC / reps);
+      us_tpl = us / g_ntpl;
+      (void)sink;
+      printf("[kws] perf: DTW match = %lu.%03lu ms for %d tpl "
+             "(%lu.%03lu ms/tpl, avg x%d)\n",
+             (unsigned long)(us / 1000), (unsigned long)(us % 1000), g_ntpl,
+             (unsigned long)(us_tpl / 1000), (unsigned long)(us_tpl % 1000),
+             reps);
     }
 
   /* Confusion margin: compare the winner against the closest template of a

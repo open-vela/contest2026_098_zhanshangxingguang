@@ -1724,6 +1724,7 @@ static void lcd_send_cmd_data(uint8_t cmd, const uint8_t *data, int len)
  *   whenever an earlier command has already turned the display on, so
  *   it only shows up on a cold boot.  Never rely on display state left
  *   behind by a previous command.
+ *   (Hit this trap twice in practice: early lcdtest_one, and lcdtest_pat_draw.)
  *
  ****************************************************************************/
 
@@ -3335,6 +3336,159 @@ static bool lcdtest_is_dvp_reserved_pin(int pin)
  *
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: lcdtest_cross_draw
+ *
+ * Description:
+ *   Draw alignment crosshair pattern on one panel:
+ *     - Full-screen black fill
+ *     - 1px white circle r=79 (AA boundary, centred at 80,80)
+ *     - 1px white circle r=40 (intermediate reference)
+ *     - 1px horizontal white line y=80, full width
+ *     - 1px vertical white line x=80, full height
+ *     - 5x5 red (0xF800) solid square at (80,80) as aiming mark
+ *
+ ****************************************************************************/
+
+static void lcdtest_cross_draw(const lcd_pins_t *pins)
+{
+#define CROSS_CX  80
+#define CROSS_CY  80
+#define CROSS_BG  0x0000  /* black */
+#define CROSS_FG  0xffff  /* white */
+#define CROSS_AIM 0xf800  /* red   */
+
+  /* 1. black background */
+
+  lcd_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, CROSS_BG);
+
+  /* 2. outer ring r=79 (AA boundary) — filled circle then hollow centre */
+
+  lcd_fill_circle(CROSS_CX, CROSS_CY, 79, CROSS_FG);
+  lcd_fill_circle(CROSS_CX, CROSS_CY, 78, CROSS_BG);
+
+  /* 3. inner ring r=40 (intermediate reference) */
+
+  lcd_fill_circle(CROSS_CX, CROSS_CY, 40, CROSS_FG);
+  lcd_fill_circle(CROSS_CX, CROSS_CY, 39, CROSS_BG);
+
+  /* 4. crosshair lines */
+
+  lcd_fill_rect(0, CROSS_CY, LCD_WIDTH - 1, CROSS_CY, CROSS_FG);
+  lcd_fill_rect(CROSS_CX, 0, CROSS_CX, LCD_HEIGHT - 1, CROSS_FG);
+
+  /* 5. 5x5 red aiming mark at centre */
+
+  lcd_fill_rect(CROSS_CX - 2, CROSS_CY - 2,
+                CROSS_CX + 2, CROSS_CY + 2, CROSS_AIM);
+
+#undef CROSS_CX
+#undef CROSS_CY
+#undef CROSS_BG
+#undef CROSS_FG
+#undef CROSS_AIM
+}
+
+/****************************************************************************
+ * Name: lcdtest_cross
+ *
+ * Description:
+ *   Alignment crosshair for shell/enclosure positioning.
+ *   Usage: lcdtest cross [both|left|right]
+ *
+ *   The red aiming mark at pixel (80,80) represents the true AA-centre
+ *   of the circular display.  Photograph the screen face-on with a ruler
+ *   to measure inter-pupil distance and offset from mounting holes.
+ *
+ ****************************************************************************/
+
+static int lcdtest_cross(int argc, char *argv[])
+{
+  const char *target = "both";
+
+  if (argc > 2)
+    {
+      target = argv[2];
+    }
+
+  if (strcmp(target, "left") != 0 &&
+      strcmp(target, "right") != 0 &&
+      strcmp(target, "both") != 0)
+    {
+      syslog(LOG_ERR, "[cross] usage: lcdtest cross [left|right|both]\n");
+      return -EINVAL;
+    }
+
+#ifdef CONFIG_EXAMPLES_GC2145_ID
+  if (bk7258_camera_dvp_active())
+    {
+      syslog(LOG_ERR,
+             "[cross] DVP camera active - release camera first\n");
+      return -EBUSY;
+    }
+#endif
+
+  /* Step 1: LDO33 enable */
+
+  syslog(LOG_INFO, "[cross] step1: LDO33 enable\n");
+  gpio_set_output(LCD_PIN_LDO33_EN);
+  gpio_write(LCD_PIN_LDO33_EN, 1);
+
+  /* Step 2: wait for power rails to settle */
+
+  syslog(LOG_INFO, "[cross] step2: wait 50 ms\n");
+  up_mdelay(50);
+
+  /* Step 3: backlight on */
+
+  syslog(LOG_INFO, "[cross] step3: backlight high\n");
+  gpio_set_output(LCD_PIN_BL);
+  gpio_write(LCD_PIN_BL, 1);
+
+  /* Draw on requested panel(s) — step4: SPI setup + RST, step5: init */
+
+  if (strcmp(target, "left") == 0 || strcmp(target, "both") == 0)
+    {
+      syslog(LOG_INFO, "[cross] step4: left SPI setup + RST\n");
+      lcd_setup_pins(&g_lcd_left);
+      /* lcd_hw_spi_usable() MUST be after lcd_setup_pins() */
+      gpio_write(g_lcd_left.rst, 0);
+      up_mdelay(15);
+      gpio_write(g_lcd_left.rst, 1);
+      up_mdelay(120);
+      lcd_init_sequence(true);
+      lcdtest_cross_draw(&g_lcd_left);
+      syslog(LOG_INFO,
+             "[cross] LEFT: AA-centre=(%d,%d) r_outer=%d r_inner=%d\n",
+             80, 80, 79, 40);
+    }
+
+  if (strcmp(target, "right") == 0 || strcmp(target, "both") == 0)
+    {
+      syslog(LOG_INFO, "[cross] step4: right SPI setup + RST\n");
+      lcd_setup_pins(&g_lcd_right);
+      /* lcd_hw_spi_usable() MUST be after lcd_setup_pins() */
+      gpio_write(g_lcd_right.rst, 0);
+      up_mdelay(15);
+      gpio_write(g_lcd_right.rst, 1);
+      up_mdelay(120);
+      lcd_init_sequence(true);
+      lcdtest_cross_draw(&g_lcd_right);
+      syslog(LOG_INFO,
+             "[cross] RIGHT: AA-centre=(%d,%d) r_outer=%d r_inner=%d\n",
+             80, 80, 79, 40);
+    }
+
+  syslog(LOG_INFO,
+         "[cross] Enclosure alignment: photograph face-on with ruler.\n"
+         "  Red mark = true AA-centre of each display.\n"
+         "  Measure: (1) inter-centre distance = eye spacing,\n"
+         "           (2) offset from mounting holes (57.00x47.00mm, D3.0).\n"
+         "  Module bbox: 20.12x22.3mm; AA-centre ~1.1mm above glass centre.\n");
+
+  return 0;
+}
+
 static int lcdtest_stages(void)
 {
   /* --- Stage A: power + backlight --- */
@@ -4729,7 +4883,7 @@ static int lcdtest_pat_draw(const lcd_pins_t *pins, const char *label)
     }
 #endif
 
-  lcd_send_cmd(0x29);  /* display on */
+  lcd_display_on();  /* display on */
 
   syslog(LOG_INFO,
          "[pat] %s: done — sent %zu bytes (expected %d)\n",
@@ -4812,7 +4966,7 @@ pat_bb_fallback:
 
   gpio_write_fast(&g_cache_cs, 1);
   lcd_spi_pins_to_gpio();
-  lcd_send_cmd(0x29);
+  lcd_display_on();
 
   syslog(LOG_INFO,
          "[pat] %s: HW SPI failed, finished with bit-bang — "
@@ -5070,7 +5224,7 @@ static int lcdtest_one(int argc, char *argv[])
 
   /* Step 5: display on */
 
-  lcd_send_cmd(0x29);  /* display on */
+  lcd_display_on();  /* display on */
   syslog(LOG_INFO, "[one] %s: display ON (0x29)\n", label);
 
   /* Step 6: dump GPIO CFG for all 5 pins */
@@ -5812,6 +5966,11 @@ int bk7258_lcdtest_main(int argc, char *argv[])
       return lcdtest_burst(argc, argv);
     }
 #endif
+
+  if (argc > 1 && strcmp(argv[1], "cross") == 0)
+    {
+      return lcdtest_cross(argc, argv);
+    }
 
   return lcdtest_stages();
 }

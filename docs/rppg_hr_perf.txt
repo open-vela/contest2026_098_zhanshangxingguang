@@ -1,0 +1,40 @@
+VelaPet · rPPG 心率推理耗时实测串口日志(BK7258 DevKit, dev-ai-contest-2026)
+========================================================================
+测量代码：board/contest_board/src/bk7258_camera.c，函数 bk7258_camera_hr()
+  - 出 win0/1/2 结果后，把三窗 DSP 流水线(去趋势 detrend + 带通 bandpass +
+    自相关 autocorrelation + 抛物线找峰)静默重跑 ×50 取平均，规避 ~10ms 系统
+    tick 粗粒度；hr_estimate_window() 只读 sig、写自己的静态 scratch，重跑不
+    影响已出的结果。
+口径：数字为“采集之后”的纯 DSP 计算耗时；采集本身为 450 帧 @ ~27.7fps(约 16s，
+      指尖 rPPG 需足够多心跳周期，故采集主导总时长)。
+
+小结（两次实测）：
+  rPPG DSP 计算 ≈ 10 ms（实测 9.8 / 10.0 ms，3 窗，×50 平均）
+  即：算法计算 ~10ms，16s 几乎全为采集，非算力瓶颈。
+
+------------------------------------------------------------------------
+nsh> camera init
+[camera] GC2145 init complete - 640x480 VYUY
+nsh> camera buf
+psram: init OK, ID=0x8d08, size=16384 KB
+[camera] Framebuf verify OK (614400 bytes, buf0=0x60000000)
+
+nsh> camera hr            # 第 1 次
+[hr] AEC locked; sampling 450 frames ...
+[hr] 450 samples, fps=27.69
+[hr]   win0: 63.5 bpm  corr=68%  PI=3.6%
+[hr]   win1: 65.4 bpm  corr=72%  PI=4.0%
+[hr]   win2: 66.2 bpm  corr=83%  PI=3.8%
+[hr] perf: rPPG estimate = 10.000 ms (3 windows, avg x50)
+[hr] HR = 65.4 bpm  (windows=3/3  corr=72%  PI=4.0%  good)
+
+nsh> camera init          # 第 2 次(重新 init/buf 后)
+nsh> camera buf
+nsh> camera hr
+[hr] AEC locked; sampling 450 frames ...
+[hr] 450 samples, fps=27.69
+[hr]   win0: 67.1 bpm  corr=59%  PI=2.5%
+[hr]   win1: 67.7 bpm  corr=57%  PI=2.3%
+[hr]   win2: 67.1 bpm  corr=51%  PI=2.3%
+[hr] perf: rPPG estimate = 9.800 ms (3 windows, avg x50)
+[hr] HR = 67.1 bpm  (windows=3/3  corr=51%  PI=2.3%  good)
