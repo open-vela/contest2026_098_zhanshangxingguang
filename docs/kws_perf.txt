@@ -1,0 +1,47 @@
+VelaPet · KWS 推理耗时实测串口日志(BK7258 DevKit, dev-ai-contest-2026)
+====================================================================
+测量代码：app/kws/kws_main.c
+  - MFCC 前端：对已采集 PCM 重复 kws_extract() ×20 取平均（规避 ~10ms 系统 tick 粗粒度，得亚毫秒精度）
+  - DTW 匹配：query 对全部模板重复匹配 ×200 取平均
+口径：数字为“采集之后”的纯计算耗时；录音本身为固定 1.5s 采集窗（24000 samples @16kHz）。
+
+小结（本次实测）：
+  MFCC 特征提取 ≈ 120 ms/次
+  DTW 匹配      ≈ 1.475 ms/模板（2 词共 2.95 ms）
+  端到端（采集窗之后）≈ 120 + 3 ≈ 123 ms，词表每 +1 词约 +1.5 ms
+
+--------------------------------------------------------------------
+nsh> kws clear
+[kws] all templates cleared
+
+nsh> kws enroll chaxinlv      # 说“查心率”
+[kws] level: peak=429 rms=105 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] perf: MFCC extract = 120.500 ms/utt (avg x20)
+[kws] enrolled "chaxinlv" (slot 0, 48 frames). total templates: 1
+
+nsh> kws enroll yundong       # 说“开始运动”
+[kws] level: peak=506 rms=93 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] perf: MFCC extract = 120.000 ms/utt (avg x20)
+[kws] enrolled "yundong" (slot 1, 48 frames). total templates: 2
+
+nsh> kws run                  # 说“开始运动” → 命中
+[kws] level: peak=355 rms=85 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] perf: MFCC extract = 120.000 ms/utt (avg x20)
+[kws] distances (lower = closer):
+    [0] chaxinlv       12.12
+    [1] yundong        10.13
+[kws] perf: DTW match = 2.950 ms for 2 tpl (1.475 ms/tpl, avg x200)
+[kws] MATCH: "yundong"  (dist=10.13, other=12.12, thresh=11.00)
+
+nsh> kws run                  # 说“查心率”附近 → 越阈值，安全拒识（不误报）
+[kws] level: peak=491 rms=162 (samples=24000)
+[kws] captured 24000 samples, 48 MFCC frames
+[kws] perf: MFCC extract = 120.000 ms/utt (avg x20)
+[kws] distances (lower = closer):
+    [0] chaxinlv       10.43
+    [1] yundong        11.64
+[kws] perf: DTW match = 2.950 ms for 2 tpl (1.475 ms/tpl, avg x200)
+[kws] REJECTED (best="chaxinlv" dist=10.43, other=11.64, thresh=11.00)

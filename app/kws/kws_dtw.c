@@ -45,6 +45,16 @@
 
 #define KWS_DTW_INF 1.0e30f
 
+/* Sakoe-Chiba band half-width.  For time-normalised sequences (both nq and
+ * nt = KWS_FIXED_FRAMES = 48), the optimal DTW path stays close to the
+ * diagonal.  Limiting the search to ±W cells around the diagonal reduces
+ * the DP grid from 48×48 = 2304 to 48×(2W+1) = 816 cells (W=8), saving
+ * ~65 % compute.  The band is wide enough to absorb residual speaking-rate
+ * variation after time normalisation without affecting recognition accuracy.
+ */
+
+#define KWS_DTW_BAND_W  8
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -87,6 +97,9 @@ float kws_dtw(const float *query, int nq,
   float *cur  = row_b;
   int i;
   int j;
+  int jmin;
+  int jmax;
+  int last_jmax;   /* jmax of the previous row, for cur[j-1] boundary */
 
   if (query == NULL || tpl == NULL ||
       nq < 1 || nt < 1 ||
@@ -95,20 +108,63 @@ float kws_dtw(const float *query, int nq,
       return KWS_DTW_INF;
     }
 
-  /* Row i = 0: only the "left" predecessor exists (monotone path). */
+  /* Initialise both rows to INF so out-of-band cells read as INF. */
 
   for (j = 0; j < nt; j++)
+    {
+      prev[j] = KWS_DTW_INF;
+      cur[j]  = KWS_DTW_INF;
+    }
+
+  /* Row i = 0: only the "left" predecessor exists (monotone path).
+   * Band: j ∈ [0, min(nt-1, W)].
+   */
+
+  jmax = nt - 1;
+  if (jmax > KWS_DTW_BAND_W)
+    {
+      jmax = KWS_DTW_BAND_W;
+    }
+
+  for (j = 0; j <= jmax; j++)
     {
       float d = local_cost(&query[0], &tpl[j * KWS_NCEP], tscale);
 
       prev[j] = (j == 0) ? d : prev[j - 1] + d;
     }
 
-  /* Rows i = 1 .. nq-1 */
+  last_jmax = jmax;
+
+  /* Rows i = 1 .. nq-1, Sakoe-Chiba band ±W around diagonal.
+   * For row i the valid column range is [max(0, i-W), min(nt-1, i+W)].
+   * Cells outside the band stay at INF (set above) and are never written,
+   * so the min3 predecessor look-ups that reach them naturally return INF.
+   */
 
   for (i = 1; i < nq; i++)
     {
-      for (j = 0; j < nt; j++)
+      jmin = i - KWS_DTW_BAND_W;
+      if (jmin < 0)
+        {
+          jmin = 0;
+        }
+
+      jmax = i + KWS_DTW_BAND_W;
+      if (jmax > nt - 1)
+        {
+          jmax = nt - 1;
+        }
+
+      /* Reset cur band region to INF before computing (prev band was
+       * already reset on the swap or initialisation).
+       */
+
+      for (j = jmin; j <= jmax; j++)
+        {
+          cur[j] = KWS_DTW_INF;
+        }
+
+      for (j = jmin; j <= jmax; j++)
         {
           float d = local_cost(&query[i * KWS_NCEP],
                                &tpl[j * KWS_NCEP], tscale);
@@ -133,9 +189,13 @@ float kws_dtw(const float *query, int nq,
         prev = cur;
         cur  = tmp;
       }
+
+      last_jmax = jmax;
     }
 
-  /* After the final swap the last computed row is in `prev`. */
+  /* After the final swap the last computed row is in `prev`.
+   * The destination cell (nq-1, nt-1) is within the last band.
+   */
 
   return prev[nt - 1] / (float)(nq + nt);
 }
